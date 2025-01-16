@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IFC Viewer</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+  </head>
+  <body>
+    <div id="viewer-container"></div>
+
+    <div class="models-panel">
+      <div class="models-header">
+        <h3>Models</h3>
+        <button class="models-toggle" title="Toggle Sidebar">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+      </div>
+      <div class="models-content">
+        <div class="models-actions">
+          <label class="load-model-btn" title="Load IFC Model">
+            <i class="fas fa-plus"></i>
+            Load Model
+            <input type="file" id="file-input" accept=".ifc" />
+          </label>
+        </div>
+        <div id="models-list">
+          <!-- Models will be added here dynamically -->
+        </div>
+        <div class="settings-section">
+          <div class="settings-header">
+            <h4>Settings</h4>
+          </div>
+          <div class="settings-content">
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="grid-toggle" />
+                Show Grid
+              </label>
+            </div>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="axes-toggle" />
+                Show Axes
+              </label>
+            </div>
+            <div class="setting-item">
+              <label>
+                <input type="checkbox" id="shadows-toggle" />
+                Enable Shadows
+              </label>
+            </div>
+            <div class="setting-item">
+              <label>Model Opacity</label>
+              <input
+                type="range"
+                id="opacity-slider"
+                min="0"
+                max="100"
+                value="95"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="properties-panel">
+      <div class="properties-header">
+        <h3>Properties</h3>
+        <button class="properties-toggle" title="Toggle Properties">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      </div>
+      <div class="properties-content">
+        <div class="no-selection">No element selected</div>
+        <div class="element-info" style="display: none">
+          <div class="property-group">
+            <h4>Element Information</h4>
+            <div class="property-list" id="element-attributes">
+              <!-- Element attributes will be added here -->
+            </div>
+          </div>
+          <div class="property-group">
+            <h4>Properties</h4>
+            <div class="property-list" id="element-properties">
+              <!-- Element properties will be added here -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="loading-overlay">
+      <div class="loading-spinner"></div>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
