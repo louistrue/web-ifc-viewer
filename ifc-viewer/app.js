@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { IfcAPI } from "web-ifc/web-ifc-api";
-import { mergeBufferGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import * as WebIFC from "web-ifc";
 
 class IFCViewer {
@@ -172,32 +171,32 @@ class IFCViewer {
       this.showLoading();
 
       // Initialize scene
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf0f0f0);
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color(0xf0f0f0);
 
       // Initialize camera
-    this.camera = new THREE.PerspectiveCamera(
-      75,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
+      this.camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
       this.camera.position.set(10, 10, 10);
       this.camera.lookAt(0, 0, 0);
 
       // Initialize renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+      this.renderer = new THREE.WebGLRenderer({ antialias: true });
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.renderer.setPixelRatio(window.devicePixelRatio);
       this.renderer.shadowMap.enabled = false;
-    this.container.appendChild(this.renderer.domElement);
+      this.container.appendChild(this.renderer.domElement);
 
       // Initialize controls
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.05;
+      this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.05;
 
-    // Add grid and axes
+      // Add grid and axes
       this.grid = new THREE.GridHelper(50, 50);
       this.grid.visible = false;
       this.scene.add(this.grid);
@@ -206,7 +205,7 @@ class IFCViewer {
       this.axes.visible = false;
       this.scene.add(this.axes);
 
-    // Add lights
+      // Add lights
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
       this.scene.add(ambientLight);
 
@@ -219,10 +218,10 @@ class IFCViewer {
       this.ifcAPI = new IfcAPI();
       await this.ifcAPI.Init();
 
-    // Setup panels
-    this.setupSettingsPanel();
-    this.setupModelsPanel();
-    this.setupPropertiesPanel();
+      // Setup panels
+      this.setupSettingsPanel();
+      this.setupModelsPanel();
+      this.setupPropertiesPanel();
 
       // Setup picking
       this.setupPicking();
@@ -386,7 +385,7 @@ class IFCViewer {
                 if (propertySet && propertySet.HasProperties) {
                   psets.push(propertySet);
                 }
-    } catch (error) {
+              } catch (error) {
                 console.warn("Error getting property set:", error);
               }
             }
@@ -451,8 +450,8 @@ class IFCViewer {
             const typeRel = await this.ifcAPI.GetLine(
               modelID,
               props.IsTypedBy.value,
-      true
-    );
+              true
+            );
             if (typeRel && typeRel.RelatingType) {
               const type = await this.ifcAPI.GetLine(
                 modelID,
@@ -879,7 +878,7 @@ class IFCViewer {
     const list = document.createElement("div");
     list.className = "property-list";
 
-          properties.forEach((prop) => {
+    properties.forEach((prop) => {
       if (!prop) return;
 
       // Handle property set name
@@ -924,9 +923,9 @@ class IFCViewer {
             value = p.ListValues.map((v) => v.value).join(", ");
           } else if (p.Unit) {
             value = `${p.Value?.value || ""} ${p.Unit.value || ""}`;
-            }
+          }
 
-            if (name && value !== undefined) {
+          if (name && value !== undefined) {
             this.addPropertyItem(list, name, value);
           }
         });
