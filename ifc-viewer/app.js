@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { IfcAPI } from "web-ifc/web-ifc-api";
 import * as WebIFC from "web-ifc";
+import { IFCBUILDING, IFCBUILDINGSTOREY, IFCPROJECT, IFCSITE } from "web-ifc";
+import { IfcAPI } from "web-ifc/web-ifc-api.js";
 
 class IFCViewer {
   constructor(container) {
@@ -1312,10 +1313,6 @@ class IFCViewer {
   }
 
   getBufferGeometry(modelID, placedGeometry) {
-    console.log(
-      `Getting geometry for expressID: ${placedGeometry.geometryExpressID}`
-    );
-
     // Get geometry data
     const geometry = this.ifcAPI.GetGeometry(
       modelID,
@@ -1378,7 +1375,7 @@ class IFCViewer {
       // Get all IfcProject elements (usually just one)
       const projectLines = await this.ifcAPI.GetLineIDsWithType(
         modelID,
-        WebIFC.IFCPROJECT
+        IFCPROJECT
       );
       console.log(`Found ${projectLines.size()} project(s)`);
 
@@ -1400,7 +1397,7 @@ class IFCViewer {
         // Get and process sites
         const siteLines = await this.ifcAPI.GetLineIDsWithType(
           modelID,
-          WebIFC.IFCSITE
+          IFCSITE
         );
         for (let j = 0; j < siteLines.size(); j++) {
           const siteID = siteLines.get(j);
@@ -1419,7 +1416,7 @@ class IFCViewer {
           // Get and process buildings
           const buildingLines = await this.ifcAPI.GetLineIDsWithType(
             modelID,
-            WebIFC.IFCBUILDING
+            IFCBUILDING
           );
           for (let k = 0; k < buildingLines.size(); k++) {
             const buildingID = buildingLines.get(k);
@@ -1442,7 +1439,7 @@ class IFCViewer {
             // Get and process building storeys
             const storeyLines = await this.ifcAPI.GetLineIDsWithType(
               modelID,
-              WebIFC.IFCBUILDINGSTOREY
+              IFCBUILDINGSTOREY
             );
             const storeys = [];
             for (let l = 0; l < storeyLines.size(); l++) {
