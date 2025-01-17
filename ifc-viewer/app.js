@@ -16,6 +16,7 @@ class IFCViewer {
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     this.ifcAPI = null;
+    this.selectedObject = null;
     this.init();
   }
 
@@ -231,9 +232,13 @@ class IFCViewer {
       this.setupSettingsPanel();
       this.setupModelsPanel();
       this.setupPropertiesPanel();
+      this.setupFloatingMenu();
 
       // Setup picking
       this.setupPicking();
+
+      // Setup keyboard shortcuts
+      this.setupKeyboardShortcuts();
 
       // Start animation loop
       this.animate();
@@ -294,10 +299,10 @@ class IFCViewer {
   handleMouseMove(event) {
     const result = this.pick(event);
 
-    // Reset previous pre-pick state
-    if (this.prePick.object) {
+    // Reset previous pre-pick state if it's not the selected object
+    if (this.prePick.object && this.prePick.object !== this.selectedObject) {
       this.prePick.object.traverse((child) => {
-        if (child.isMesh && child.originalMaterial) {
+        if (child.isMesh && child.originalMaterial && !child.isSelected) {
           child.material = child.originalMaterial;
           delete child.originalMaterial;
         }
@@ -305,18 +310,18 @@ class IFCViewer {
       this.prePick.object = null;
     }
 
-    if (result) {
+    if (result && result.object !== this.selectedObject) {
       const { object } = result;
-      // Store original materials and apply pre-pick material
+      // Store original materials and apply pre-pick material only if not selected
       object.traverse((child) => {
-        if (child.isMesh) {
+        if (child.isMesh && !child.isSelected) {
           child.originalMaterial = child.material;
           child.material = this.prePick.material;
         }
       });
       this.prePick.object = object;
       this.container.style.cursor = "pointer";
-    } else {
+    } else if (!result || result.object === this.selectedObject) {
       this.container.style.cursor = "default";
     }
   }
@@ -325,17 +330,31 @@ class IFCViewer {
     const result = this.pick(event);
 
     // Reset previous selection
-    this.models.forEach((model) => {
-      model.traverse((child) => {
+    if (this.selectedObject) {
+      this.selectedObject.traverse((child) => {
         if (child.isMesh && child.originalMaterial) {
+          child.material = child.originalMaterial;
+          delete child.originalMaterial;
+          delete child.isSelected;
+        }
+      });
+      this.selectedObject = null;
+    }
+
+    // Clear pre-pick state if it exists
+    if (this.prePick.object) {
+      this.prePick.object.traverse((child) => {
+        if (child.isMesh && child.originalMaterial && !child.isSelected) {
           child.material = child.originalMaterial;
           delete child.originalMaterial;
         }
       });
-    });
+      this.prePick.object = null;
+    }
 
     if (result) {
       const { object, modelID, expressID } = result;
+      this.selectedObject = object;
 
       try {
         // Get basic properties with error handling
@@ -508,10 +527,62 @@ class IFCViewer {
           }
         }
 
+        // Get quantity sets
+        const quantities = [];
+        try {
+          const quantityLines = await this.ifcAPI.GetLineIDsWithType(
+            modelID,
+            WebIFC.IFCRELDEFINESBYPROPERTIES
+          );
+
+          for (let i = 0; i < quantityLines.size(); i++) {
+            const relID = quantityLines.get(i);
+            const rel = await this.ifcAPI.GetLine(modelID, relID);
+
+            if (!rel || !rel.RelatedObjects) continue;
+
+            // Check if this relationship references our element
+            let foundElement = false;
+            const relatedObjects = Array.isArray(rel.RelatedObjects)
+              ? rel.RelatedObjects
+              : [rel.RelatedObjects];
+
+            for (const relID of relatedObjects) {
+              if (
+                relID &&
+                typeof relID.value !== "undefined" &&
+                relID.value === expressID
+              ) {
+                foundElement = true;
+                break;
+              }
+            }
+
+            if (foundElement && rel.RelatingPropertyDefinition) {
+              try {
+                const quantitySet = await this.ifcAPI.GetLine(
+                  modelID,
+                  rel.RelatingPropertyDefinition.value,
+                  true
+                );
+                // Check if it's a quantity set (has Quantities property)
+                if (quantitySet && quantitySet.Quantities) {
+                  quantities.push(quantitySet);
+                }
+              } catch (error) {
+                console.warn("Error getting quantity set:", error);
+              }
+            }
+          }
+        } catch (error) {
+          console.warn("Error getting quantity sets:", error);
+        }
+
         console.log("Property sets:", psets);
         console.log("Materials:", materials);
         console.log("Type properties:", typeProps);
         console.log("Spatial info:", spatialInfo);
+        console.log("Quantity sets:", quantities);
 
         // Display all properties
         this.displayElementProperties(
@@ -521,7 +592,8 @@ class IFCViewer {
           typeProps,
           materials,
           [], // classifications (not implemented)
-          spatialInfo
+          spatialInfo,
+          quantities // Add quantities parameter
         );
 
         // Highlight selected object
@@ -538,6 +610,48 @@ class IFCViewer {
         document
           .querySelector(".properties-panel")
           .classList.remove("collapsed");
+
+        // Add visibility toggle button to header
+        const elementHeader = document.querySelector(".element-info");
+        const headerControls =
+          elementHeader.querySelector(".element-controls") ||
+          document.createElement("div");
+        headerControls.className = "element-controls";
+        headerControls.innerHTML = `
+          <button class="visibility-toggle" title="Toggle Visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        `;
+
+        // Add click handler for visibility toggle
+        const visibilityBtn =
+          headerControls.querySelector(".visibility-toggle");
+        visibilityBtn.addEventListener("click", () => {
+          const isVisible = object.visible;
+          object.visible = !isVisible;
+          visibilityBtn.innerHTML = isVisible
+            ? '<i class="fas fa-eye-slash"></i>'
+            : '<i class="fas fa-eye"></i>';
+
+          // Update tree view visibility
+          const treeItem = document.querySelector(
+            `.tree-item-header[data-model-id="${modelID}"][data-express-id="${expressID}"]`
+          );
+          if (treeItem) {
+            const treeVisibilityBtn = treeItem.querySelector(
+              ".tree-item-visibility"
+            );
+            if (treeVisibilityBtn) {
+              treeVisibilityBtn.innerHTML = isVisible
+                ? '<i class="fas fa-eye-slash"></i>'
+                : '<i class="fas fa-eye"></i>';
+            }
+          }
+        });
+
+        if (!elementHeader.querySelector(".element-controls")) {
+          elementHeader.insertBefore(headerControls, elementHeader.firstChild);
+        }
       } catch (error) {
         console.error("Error getting element properties:", error);
         console.error("Error details:", error.stack);
@@ -546,6 +660,7 @@ class IFCViewer {
       // Clear selection
       document.querySelector(".no-selection").style.display = "block";
       document.querySelector(".element-info").style.display = "none";
+      document.querySelector(".properties-panel").classList.add("collapsed");
     }
   }
 
@@ -596,7 +711,8 @@ class IFCViewer {
     typeProps,
     materials,
     classifications,
-    spatialInfo
+    spatialInfo,
+    quantities
   ) {
     const attributesList = document.getElementById("element-attributes");
     const propertiesList = document.getElementById("element-properties");
@@ -880,6 +996,76 @@ class IFCViewer {
         });
       });
       propertiesList.appendChild(spatialContainer);
+    }
+
+    // Display quantity sets
+    if (quantities && quantities.length > 0) {
+      const quantityContainer = document.createElement("div");
+      quantityContainer.className = "property-group";
+      quantityContainer.innerHTML = "<h4>Quantities</h4>";
+
+      quantities.forEach((quantitySet) => {
+        const quantityHeader = document.createElement("h5");
+        quantityHeader.textContent = quantitySet.Name?.value || "Quantity Set";
+        quantityContainer.appendChild(quantityHeader);
+
+        if (quantitySet.Quantities) {
+          const quantities = Array.isArray(quantitySet.Quantities)
+            ? quantitySet.Quantities
+            : [quantitySet.Quantities];
+
+          quantities.forEach((quantity) => {
+            if (!quantity || !quantity.Name) return;
+
+            const name = quantity.Name.value;
+            let value;
+            let unit = "";
+
+            // Handle different quantity types
+            if (quantity.LengthValue !== undefined) {
+              value = quantity.LengthValue.value;
+              unit = "m";
+            } else if (quantity.AreaValue !== undefined) {
+              value = quantity.AreaValue.value;
+              unit = "m²";
+            } else if (quantity.VolumeValue !== undefined) {
+              value = quantity.VolumeValue.value;
+              unit = "m³";
+            } else if (quantity.WeightValue !== undefined) {
+              value = quantity.WeightValue.value;
+              unit = "kg";
+            } else if (quantity.CountValue !== undefined) {
+              value = quantity.CountValue.value;
+            }
+
+            if (name && value !== undefined) {
+              // Format the value based on its magnitude
+              let formattedValue;
+              if (typeof value === "number") {
+                if (value < 0.01) {
+                  formattedValue = value.toFixed(4);
+                } else if (value < 1) {
+                  formattedValue = value.toFixed(3);
+                } else if (value < 10) {
+                  formattedValue = value.toFixed(2);
+                } else {
+                  formattedValue = value.toFixed(1);
+                }
+              } else {
+                formattedValue = value;
+              }
+
+              this.addPropertyItem(
+                quantityContainer,
+                name,
+                unit ? `${formattedValue} ${unit}` : formattedValue
+              );
+            }
+          });
+        }
+      });
+
+      propertiesList.appendChild(quantityContainer);
     }
   }
 
@@ -1518,14 +1704,16 @@ class IFCViewer {
 
   highlightElement(modelID, expressID) {
     // Reset previous highlighting
-    this.models.forEach((model) => {
-      model.traverse((child) => {
+    if (this.selectedObject) {
+      this.selectedObject.traverse((child) => {
         if (child.isMesh && child.originalMaterial) {
           child.material = child.originalMaterial;
           delete child.originalMaterial;
+          delete child.isSelected;
         }
       });
-    });
+      this.selectedObject = null;
+    }
 
     // Find and highlight the new element
     this.models.forEach((model) => {
@@ -1535,15 +1723,97 @@ class IFCViewer {
             child.name.startsWith("Element_") &&
             child.expressID === expressID
           ) {
+            this.selectedObject = child;
             child.traverse((mesh) => {
               if (mesh.isMesh) {
                 mesh.originalMaterial = mesh.material;
                 mesh.material = this.selectedMaterial;
+                mesh.isSelected = true;
               }
             });
           }
         });
       }
+    });
+  }
+
+  setupFloatingMenu() {
+    // Create floating menu
+    const menu = document.createElement("div");
+    menu.className = "floating-menu";
+    menu.innerHTML = `
+      <button class="menu-btn" title="Hide/Show Selected (Space)">
+        <i class="fas fa-eye"></i>
+      </button>
+      <button class="menu-btn" title="Isolate Selected">
+        <i class="fas fa-expand"></i>
+      </button>
+      <button class="menu-btn" title="Show All">
+        <i class="fas fa-border-all"></i>
+      </button>
+    `;
+
+    // Add event listeners
+    const [hideBtn, isolateBtn, showAllBtn] =
+      menu.querySelectorAll(".menu-btn");
+
+    hideBtn.addEventListener("click", () => this.toggleSelectedVisibility());
+    isolateBtn.addEventListener("click", () => this.isolateSelected());
+    showAllBtn.addEventListener("click", () => this.showAll());
+
+    document.body.appendChild(menu);
+  }
+
+  setupKeyboardShortcuts() {
+    document.addEventListener("keydown", (event) => {
+      // Space to toggle visibility of selected object
+      if (
+        event.code === "Space" &&
+        this.selectedObject &&
+        !event.target.closest("input, textarea")
+      ) {
+        event.preventDefault();
+        this.toggleSelectedVisibility();
+      }
+    });
+  }
+
+  toggleSelectedVisibility() {
+    if (!this.selectedObject) return;
+
+    const isVisible = this.selectedObject.visible;
+    this.selectedObject.traverse((child) => {
+      if (child.isMesh) {
+        child.visible = !isVisible;
+      }
+    });
+  }
+
+  isolateSelected() {
+    if (!this.selectedObject) return;
+
+    this.models.forEach((model) => {
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.visible = false;
+        }
+      });
+    });
+
+    this.selectedObject.traverse((child) => {
+      if (child.isMesh) {
+        child.visible = true;
+      }
+    });
+  }
+
+  showAll() {
+    this.models.forEach((model) => {
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.visible = true;
+        }
+      });
     });
   }
 }

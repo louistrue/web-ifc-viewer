@@ -454,6 +454,47 @@
   word-break: break-all;
 }
 
+/* Element controls in properties panel */
+.element-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.visibility-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.visibility-toggle:hover {
+  background-color: #f0f0f0;
+  color: #2196f3;
+}
+
+/* Tree item visibility toggle */
+.tree-item-visibility {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #666;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.tree-item-visibility:hover {
+  background-color: #f0f0f0;
+  color: #2196f3;
+}
+
 /* Highlight selected element */
 .selected-element {
   outline: 2px solid #2196f3;
@@ -467,4 +508,52 @@
 
 .settings-panel.collapsed {
   right: 1rem;
+}
+
+/* Floating Menu */
+.floating-menu {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  padding: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+  z-index: 1000;
+  backdrop-filter: blur(10px);
+  background-color: rgba(255, 255, 255, 0.9);
+}
+
+.menu-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  font-size: 18px;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.menu-btn:hover {
+  background-color: #f0f0f0;
+  color: #2196f3;
+}
+
+.menu-btn:active {
+  transform: scale(0.95);
+}
+
+/* Remove old visibility toggle styles */
+.element-controls,
+.visibility-toggle,
+.tree-item-visibility {
+  display: none;
 }
