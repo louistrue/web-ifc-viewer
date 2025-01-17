@@ -1,28 +1,12 @@
 import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+import { fileURLToPath, URL } from "url";
 import { resolve } from "path";
 import fs from "fs";
 
 export default defineConfig({
-  server: {
-    port: 3000,
-    fs: {
-      allow: [".."],
-    },
-  },
-  optimizeDeps: {
-    exclude: ["web-ifc"],
-  },
-  build: {
-    commonjsOptions: {
-      include: [/web-ifc-three/, /three/],
-    },
-  },
-  resolve: {
-    alias: {
-      "web-ifc": resolve(__dirname, "node_modules/web-ifc"),
-    },
-  },
   plugins: [
+    vue(),
     {
       name: "copy-wasm",
       buildStart() {
@@ -38,4 +22,18 @@ export default defineConfig({
       },
     },
   ],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "web-ifc": resolve(__dirname, "node_modules/web-ifc"),
+    },
+  },
+  optimizeDeps: {
+    exclude: ["web-ifc"],
+  },
+  build: {
+    commonjsOptions: {
+      include: [/web-ifc/, /three/],
+    },
+  },
 });
