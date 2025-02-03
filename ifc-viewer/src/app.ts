@@ -196,8 +196,6 @@ export class IFCViewer {
         const placedGeometries = mesh.geometries;
         const expressID = mesh.expressID;
 
-        console.log("Creating element group for expressID:", expressID);
-
         const elementGroup = this.createElementGroup(expressID, modelID);
 
         for (let i = 0; i < placedGeometries.size(); i++) {
@@ -219,7 +217,12 @@ export class IFCViewer {
               side: THREE.DoubleSide,
             });
 
-            const mesh = this.createMesh(geometry, material, expressID, modelID);
+            const mesh = this.createMesh(
+              geometry,
+              material,
+              expressID,
+              modelID
+            );
 
             elementGroup.add(mesh);
           } catch (error) {
@@ -561,18 +564,23 @@ export class IFCViewer {
     elementGroup.userData = {
       modelID,
       expressID,
-      type: 'element'
+      type: "element",
     };
     return elementGroup;
   }
 
-  private createMesh(geometry: THREE.BufferGeometry, material: THREE.Material, expressID: number, modelID: number): THREE.Mesh {
+  private createMesh(
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    expressID: number,
+    modelID: number
+  ): THREE.Mesh {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `Mesh_${expressID}_${this.meshCounter++}`;
     mesh.userData = {
       modelID,
       expressID,
-      type: 'mesh'
+      type: "mesh",
     };
     return mesh;
   }

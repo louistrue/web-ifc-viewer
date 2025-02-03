@@ -15,8 +15,8 @@ export class PropertiesPanel {
 
   private initializeElements(): void {
     // Wait for DOM to be ready
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => this.findElements());
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => this.findElements());
     } else {
       this.findElements();
     }
@@ -29,7 +29,13 @@ export class PropertiesPanel {
     this.attributesList = document.getElementById("element-attributes");
     this.propertiesList = document.getElementById("element-properties");
 
-    if (!this.panel || !this.noSelection || !this.elementInfo || !this.attributesList || !this.propertiesList) {
+    if (
+      !this.panel ||
+      !this.noSelection ||
+      !this.elementInfo ||
+      !this.attributesList ||
+      !this.propertiesList
+    ) {
       console.error("Failed to find all required properties panel elements");
     }
   }
@@ -58,10 +64,22 @@ export class PropertiesPanel {
 
   public displayElementProperties(props: any): void {
     // Verify elements exist
-    if (!this.panel || !this.noSelection || !this.elementInfo || !this.attributesList || !this.propertiesList) {
+    if (
+      !this.panel ||
+      !this.noSelection ||
+      !this.elementInfo ||
+      !this.attributesList ||
+      !this.propertiesList
+    ) {
       console.error("Missing DOM elements");
       this.findElements(); // Try to find elements again
-      if (!this.panel || !this.noSelection || !this.elementInfo || !this.attributesList || !this.propertiesList) {
+      if (
+        !this.panel ||
+        !this.noSelection ||
+        !this.elementInfo ||
+        !this.attributesList ||
+        !this.propertiesList
+      ) {
         return;
       }
     }
@@ -115,7 +133,7 @@ export class PropertiesPanel {
   }
 
   private displayMaterials(container: HTMLElement, materials: any[]): void {
-    materials.forEach(material => {
+    materials.forEach((material) => {
       if (material.ForLayerSet) {
         this.displayMaterialLayerSet(container, material.ForLayerSet);
       } else {
@@ -129,9 +147,11 @@ export class PropertiesPanel {
     layers.forEach((layer: any, index: number) => {
       const layerDiv = document.createElement("div");
       layerDiv.className = "material-layer";
-      
+
       const layerHeader = document.createElement("h5");
-      layerHeader.textContent = `Layer ${index + 1}: ${layer.Name?.value || 'Unnamed Layer'}`;
+      layerHeader.textContent = `Layer ${index + 1}: ${
+        layer.Name?.value || "Unnamed Layer"
+      }`;
       layerDiv.appendChild(layerHeader);
 
       if (layer.Material?.Name) {
@@ -139,7 +159,11 @@ export class PropertiesPanel {
       }
       if (layer.LayerThickness) {
         const thickness = layer.LayerThickness.value * 1000; // Convert to mm
-        this.addPropertyItem(layerDiv, "Thickness", `${thickness.toFixed(0)} mm`);
+        this.addPropertyItem(
+          layerDiv,
+          "Thickness",
+          `${thickness.toFixed(0)} mm`
+        );
       }
       if (layer.IsVentilated !== null) {
         this.addPropertyItem(layerDiv, "Ventilated", layer.IsVentilated);
@@ -154,14 +178,21 @@ export class PropertiesPanel {
       this.addPropertyItem(container, "Name", material.Name.value);
     }
     if (material.Description) {
-      this.addPropertyItem(container, "Description", material.Description.value);
+      this.addPropertyItem(
+        container,
+        "Description",
+        material.Description.value
+      );
     }
     if (material.Category) {
       this.addPropertyItem(container, "Category", material.Category.value);
     }
   }
 
-  private displayPropertyGroup(container: HTMLElement, properties: any[]): void {
+  private displayPropertyGroup(
+    container: HTMLElement,
+    properties: any[]
+  ): void {
     const list = document.createElement("div");
     list.className = "property-list";
 

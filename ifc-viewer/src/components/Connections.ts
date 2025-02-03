@@ -103,12 +103,12 @@ export class Connections {
 
       // Analyze connections between elements
       const connections = await this.findConnections(elements);
-      
+
       // Store connection data
       this.connectionData = {
         elements,
         connections,
-        statistics: this.calculateStatistics(connections)
+        statistics: this.calculateStatistics(connections),
       };
 
       // Visualize connections
@@ -117,20 +117,21 @@ export class Connections {
       // Update UI
       this.updateConnectionsUI();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       console.error("Failed to analyze connections:", errorMessage);
-      
+
       // Show error in UI
       this.showError(errorMessage);
     }
   }
 
   private showError(message: string): void {
-    const connectionsPanel = document.querySelector('.connections-panel');
+    const connectionsPanel = document.querySelector(".connections-panel");
     if (!connectionsPanel) return;
 
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'connections-error';
+    const errorDiv = document.createElement("div");
+    errorDiv.className = "connections-error";
     errorDiv.innerHTML = `
       <div class="error-message">
         <i class="fas fa-exclamation-circle"></i>
@@ -143,16 +144,16 @@ export class Connections {
     `;
 
     // Add retry handler
-    const retryButton = errorDiv.querySelector('.retry-button');
+    const retryButton = errorDiv.querySelector(".retry-button");
     if (retryButton) {
-      retryButton.addEventListener('click', () => {
+      retryButton.addEventListener("click", () => {
         errorDiv.remove();
         this.analyzeConnections();
       });
     }
 
     // Clear existing content and show error
-    connectionsPanel.innerHTML = '';
+    connectionsPanel.innerHTML = "";
     connectionsPanel.appendChild(errorDiv);
   }
 
@@ -172,14 +173,28 @@ export class Connections {
     return elements;
   }
 
-  private async findConnections(elements: ElementInfo[]): Promise<Map<string, Connection>> {
+  private async findConnections(
+    elements: ElementInfo[]
+  ): Promise<Map<string, Connection>> {
     const connections = new Map<string, Connection>();
+
+    // Process elements in chunks to avoid blocking the UI
+    const chunkSize = 10;
     for (let i = 0; i < elements.length; i++) {
       for (let j = i + 1; j < elements.length; j++) {
-        const intersection = await this.findIntersection(elements[i].object, elements[j].object);
+        if (j % chunkSize === 0) {
+          // Allow UI to update
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        const intersection = await this.findIntersection(
+          elements[i].object,
+          elements[j].object
+        );
+
         if (intersection) {
           const connectionId = `${elements[i].expressID}-${elements[j].expressID}`;
-          const connection: Connection = {
+          const connection = {
             id: connectionId,
             elements: [elements[i], elements[j]],
             type: intersection.type,
@@ -192,18 +207,26 @@ export class Connections {
           elements[i].object.userData.hasConnections = true;
           elements[j].object.userData.hasConnections = true;
 
-          this.updateElementConnections(
-            elements[i].expressID,
-            elements[j].expressID,
-            connectionId
-          );
+          // Store connection references
+          if (!this.elementConnections.has(elements[i].expressID)) {
+            this.elementConnections.set(elements[i].expressID, new Set());
+          }
+          if (!this.elementConnections.has(elements[j].expressID)) {
+            this.elementConnections.set(elements[j].expressID, new Set());
+          }
+          this.elementConnections.get(elements[i].expressID)?.add(connectionId);
+          this.elementConnections.get(elements[j].expressID)?.add(connectionId);
         }
       }
     }
+
     return connections;
   }
 
-  private async findIntersection(object1: THREE.Object3D, object2: THREE.Object3D): Promise<any | null> {
+  private async findIntersection(
+    object1: THREE.Object3D,
+    object2: THREE.Object3D
+  ): Promise<any | null> {
     if (this.connectionDetector) {
       return this.connectionDetector.findIntersection(object1, object2);
     }
@@ -236,7 +259,7 @@ export class Connections {
 
   public exitConnectionMode(): void {
     this.isConnectionMode = false;
-    
+
     // Reset model materials
     this.viewer.models.forEach((model: IFCModel) => {
       model.traverse((child: THREE.Object3D) => {
@@ -264,15 +287,24 @@ export class Connections {
   private visualizeConnections(connections: Map<string, Connection>): void {
     if (!this.connectionVisualizer) return;
 
+    // Clear existing visualizations
+    this.connectionVisualizations.forEach((vis) => {
+      if (vis.points) this.scene.remove(vis.points);
+      if (vis.lines) this.scene.remove(vis.lines);
+      if (vis.surface) {
+        this.scene.remove(vis.surface);
+        if (vis.wireframe) this.scene.remove(vis.wireframe);
+      }
+    });
+    this.connectionVisualizations.clear();
+
+    // Create new visualizations
     connections.forEach((connection) => {
-      const visualization = this.connectionVisualizer!.createVisualization(
-        connection.type,
+      const visualization = this.connectionVisualizer.visualize(
         connection.visualization
       );
       this.connectionVisualizations.set(connection.id, visualization);
     });
-
-    this.connectionVisualizer.updateLabels();
   }
 
   private updateConnectionsPanel(

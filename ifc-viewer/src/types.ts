@@ -12,7 +12,7 @@ export interface IFCMesh extends THREE.Mesh {
     modelID: number;
     expressID: number;
     originalMaterial?: THREE.Material;
-    type: 'mesh';
+    type: "mesh";
     isSelected?: boolean;
   };
 }
@@ -23,7 +23,7 @@ export interface IFCElementGroup extends THREE.Group {
   userData: {
     modelID: number;
     expressID: number;
-    type: 'element';
+    type: "element";
   };
 }
 
