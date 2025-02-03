@@ -1,70 +1,95 @@
 import * as THREE from "three";
+import { IFCViewer } from "../app";
+import { IFCModel } from "../types";
 
 export class Sidebar {
-  constructor(viewer) {
+  private viewer: IFCViewer;
+
+  constructor(viewer: IFCViewer) {
     this.viewer = viewer;
     this.setupSettingsPanel();
     this.setupModelsPanel();
   }
 
-  setupSettingsPanel() {
+  private setupSettingsPanel(): void {
     // Grid toggle
-    const gridToggle = document.getElementById("grid-toggle");
-    gridToggle.addEventListener("change", () => {
-      if (this.viewer.grid) {
-        this.viewer.grid.visible = gridToggle.checked;
-      }
-    });
+    const gridToggle = document.getElementById("grid-toggle") as HTMLInputElement;
+    if (gridToggle) {
+      gridToggle.addEventListener("change", () => {
+        if (this.viewer.grid) {
+          this.viewer.grid.visible = gridToggle.checked;
+        }
+      });
+    }
 
     // Axes toggle
-    const axesToggle = document.getElementById("axes-toggle");
-    axesToggle.addEventListener("change", () => {
-      if (this.viewer.axes) {
-        this.viewer.axes.visible = axesToggle.checked;
-      }
-    });
+    const axesToggle = document.getElementById("axes-toggle") as HTMLInputElement;
+    if (axesToggle) {
+      axesToggle.addEventListener("change", () => {
+        if (this.viewer.axes) {
+          this.viewer.axes.visible = axesToggle.checked;
+        }
+      });
+    }
 
     // Shadows toggle
-    const shadowsToggle = document.getElementById("shadows-toggle");
-    shadowsToggle.addEventListener("change", () => {
-      this.viewer.renderer.shadowMap.enabled = shadowsToggle.checked;
-      this.viewer.models.forEach((model) => {
-        model.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = shadowsToggle.checked;
-            child.receiveShadow = shadowsToggle.checked;
-          }
+    const shadowsToggle = document.getElementById("shadows-toggle") as HTMLInputElement;
+    if (shadowsToggle) {
+      shadowsToggle.addEventListener("change", () => {
+        this.viewer.renderer.shadowMap.enabled = shadowsToggle.checked;
+        this.viewer.models.forEach((model) => {
+          model.traverse((child: THREE.Object3D) => {
+            if ((child as THREE.Mesh).isMesh) {
+              child.castShadow = shadowsToggle.checked;
+              child.receiveShadow = shadowsToggle.checked;
+            }
+          });
         });
       });
-    });
+    }
 
     // Opacity slider
-    const opacitySlider = document.getElementById("opacity-slider");
-    opacitySlider.addEventListener("input", () => {
-      const opacity = opacitySlider.value / 100;
-      this.viewer.models.forEach((model) => {
-        model.traverse((child) => {
-          if (child.isMesh && child.material) {
-            child.material.opacity = opacity;
-            child.material.transparent = opacity < 1;
-            child.material.needsUpdate = true;
-          }
+    const opacitySlider = document.getElementById("opacity-slider") as HTMLInputElement;
+    if (opacitySlider) {
+      opacitySlider.addEventListener("input", () => {
+        const opacity = Number(opacitySlider.value) / 100;
+        this.viewer.models.forEach((model) => {
+          model.traverse((child: THREE.Object3D) => {
+            if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).material) {
+              const material = (child as THREE.Mesh).material as THREE.Material;
+              if (Array.isArray(material)) {
+                material.forEach((m) => {
+                  m.opacity = opacity;
+                  m.transparent = opacity < 1;
+                  m.needsUpdate = true;
+                });
+              } else {
+                material.opacity = opacity;
+                material.transparent = opacity < 1;
+                material.needsUpdate = true;
+              }
+            }
+          });
         });
       });
-    });
+    }
   }
 
-  setupModelsPanel() {
+  private setupModelsPanel(): void {
     // Toggle models panel
     const modelsPanel = document.querySelector(".models-panel");
     const modelsToggle = document.querySelector(".models-toggle");
-    modelsToggle.addEventListener("click", () => {
-      modelsPanel.classList.toggle("collapsed");
-    });
+    if (modelsPanel && modelsToggle) {
+      modelsToggle.addEventListener("click", () => {
+        modelsPanel.classList.toggle("collapsed");
+      });
+    }
   }
 
-  createModelListItem(modelId, fileName, model) {
+  public createModelListItem(modelId: number, fileName: string, model: IFCModel): void {
     const modelsList = document.getElementById("models-list");
+    if (!modelsList) return;
+
     const modelItem = document.createElement("div");
     modelItem.className = "model-item";
     modelItem.id = `model-${modelId}`;
@@ -118,12 +143,8 @@ export class Sidebar {
     const center = box.getCenter(new THREE.Vector3());
 
     modelInfo.innerHTML = `
-      <div>Size: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(
-      2
-    )}</div>
-      <div>Center: (${center.x.toFixed(2)}, ${center.y.toFixed(
-      2
-    )}, ${center.z.toFixed(2)})</div>
+      <div>Size: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}</div>
+      <div>Center: (${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)})</div>
     `;
 
     // Add spatial tree section to model card
@@ -138,4 +159,4 @@ export class Sidebar {
     modelItem.appendChild(treeSection);
     modelsList.appendChild(modelItem);
   }
-}
+} 
