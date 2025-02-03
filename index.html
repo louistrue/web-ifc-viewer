@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFC Viewer</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+      .tree-item {
+        margin-left: 20px;
+      }
+      .tree-item-children {
+        display: none;
+      }
+      .tree-item.expanded > .tree-item-children {
+        display: block;
+      }
+      .tree-item-header {
+        display: flex;
+        align-items: center;
+        padding: 4px;
+        cursor: pointer;
+      }
+      .tree-item-header.selected {
+        background-color: #e3f2fd;
+      }
+      .tree-item-toggle {
+        width: 20px;
+        text-align: center;
+      }
+      .tree-item-icon {
+        width: 24px;
+        text-align: center;
+        margin-right: 8px;
+      }
+    </style>
+</head>
+<body>
+    <div id="viewer-container"></div>
+    
+    <!-- Properties Panel -->
+    <div class="properties-panel">
+        <div class="properties-header">
+            <h3>Properties</h3>
+            <button class="properties-toggle">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+        <div class="properties-content">
+            <div class="no-selection">No element selected</div>
+            <div class="element-info" style="display: none">
+                <div class="property-group">
+                    <h4>Element Information</h4>
+                    <div class="property-list" id="element-attributes">
+                        <!-- Element attributes will be added here -->
+                    </div>
+                </div>
+                <div class="property-group">
+                    <h4>Properties</h4>
+                    <div class="property-list" id="element-properties">
+                        <!-- Element properties will be added here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Tree Panel -->
+    <div class="models-panel">
+        <div class="models-header">
+            <h3>Models</h3>
+            <button class="models-toggle">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+        <div class="models-content">
+            <div id="models-list"></div>
+        </div>
+    </div>
+
+    <div class="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+    
+    <script type="module" src="/src/app.ts"></script>
+</body>
+</html> 
