@@ -13,50 +13,262 @@ export class FloatingMenu {
   }
 
   private setupFloatingMenu(): void {
-    // Create floating menu
     this.menu = document.createElement("div");
     this.menu.className = "floating-menu";
-    this.menu.innerHTML = `
-      <button class="menu-btn" title="Hide/Show Selected (Space)">
-        <i class="fas fa-eye"></i>
-      </button>
-      <button class="menu-btn" title="Isolate Selected">
-        <i class="fas fa-expand"></i>
-      </button>
-      <button class="menu-btn" title="Show All">
-        <i class="fas fa-border-all"></i>
-      </button>
-      <button class="menu-btn analyze-btn" title="Analyze Connections">
-        <i class="fas fa-project-diagram"></i>
-      </button>
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .floating-menu {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .menu-row {
+        display: flex;
+        flex-direction: row;
+        gap: 4px;
+      }
+
+      .menu-row.connection-controls {
+        display: none;
+      }
+
+      .menu-row.connection-controls.active {
+        display: flex;
+      }
+
+      .menu-btn {
+        position: relative;
+      }
+
+      .menu-btn.active i {
+        color: #2196F3;
+      }
+
+      .menu-btn input[type="checkbox"] {
+        display: none;
+      }
+
+      .menu-btn input[type="checkbox"]:not(:checked) + i {
+        opacity: 0.5;
+      }
+
+      .menu-btn input[type="checkbox"]:checked + i {
+        opacity: 1;
+        color: #2196F3;
+      }
+
+      .menu-btn.visibility-btn {
+        opacity: 0.7;
+        transition: opacity 0.2s;
+      }
+
+      .menu-btn.visibility-btn:not(.disabled) {
+        opacity: 1;
+      }
+
+      .menu-btn.visibility-btn.active i {
+        color: #2196F3;
+        opacity: 1;
+      }
+
+      .menu-btn.visibility-btn:not(.active) i {
+        opacity: 0.5;
+      }
     `;
+    document.head.appendChild(style);
+
+    this.menu.innerHTML = `
+      <div class="menu-row main-controls">
+        <button class="menu-btn" title="Hide/Show Selected (Space)">
+          <i class="fas fa-eye"></i>
+        </button>
+        <button class="menu-btn" title="Isolate Selected">
+          <i class="fas fa-expand"></i>
+        </button>
+        <button class="menu-btn" title="Show All">
+          <i class="fas fa-border-all"></i>
+        </button>
+        <button class="menu-btn analyze-btn" title="Analyze Connections">
+          <i class="fas fa-project-diagram"></i>
+        </button>
+      </div>
+      <div class="menu-row connection-controls">
+        <button class="menu-btn visibility-btn" title="Show Points" disabled>
+          <input type="checkbox" class="type-visibility" data-type="point" checked>
+          <i class="fas fa-circle"></i>
+        </button>
+        <button class="menu-btn visibility-btn" title="Show Lines" disabled>
+          <input type="checkbox" class="type-visibility" data-type="line" checked>
+          <i class="fas fa-minus"></i>
+        </button>
+        <button class="menu-btn visibility-btn" title="Show Surfaces" disabled>
+          <input type="checkbox" class="type-visibility" data-type="surface" checked>
+          <i class="fas fa-square"></i>
+        </button>
+        <button class="menu-btn visibility-btn" title="Show Labels" disabled>
+          <input type="checkbox" class="show-labels">
+          <i class="fas fa-tag"></i>
+        </button>
+      </div>
+    `;
+
+    // Update the visibility buttons to handle clicks
+    const visibilityBtns = this.menu.querySelectorAll(".visibility-btn");
+    visibilityBtns.forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        if (btn.hasAttribute("disabled")) return;
+
+        const checkbox = btn.querySelector(
+          'input[type="checkbox"]'
+        ) as HTMLInputElement;
+        if (!checkbox) return;
+
+        // Toggle checkbox
+        checkbox.checked = !checkbox.checked;
+
+        // Manually trigger change event
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+        // Prevent double-triggering
+        e.stopPropagation();
+      });
+    });
+
+    // Keep existing checkbox change handlers
+    const typeToggles =
+      this.menu.querySelectorAll<HTMLInputElement>(".type-visibility");
+    typeToggles.forEach((toggle) => {
+      toggle.addEventListener("change", (e) => {
+        const target = e.target as HTMLInputElement;
+        const type = target.dataset.type;
+        const button = target.closest(".menu-btn");
+
+        console.log("Visibility toggle clicked:", {
+          type,
+          checked: target.checked,
+          button: button?.className,
+          hasVisualizer: !!this.connections?.connectionVisualizer,
+        });
+
+        if (this.connections?.connectionVisualizer && type) {
+          console.log("Calling setTypeVisibility:", type, target.checked);
+          this.connections.connectionVisualizer.setTypeVisibility(
+            type,
+            target.checked
+          );
+
+          // Update button state
+          if (button) {
+            console.log("Updating button state:", target.checked);
+            button.classList.toggle("active", target.checked);
+          }
+        }
+      });
+    });
+
+    // Add event listener for label visibility
+    const labelToggle =
+      this.menu.querySelector<HTMLInputElement>(".show-labels");
+    if (labelToggle) {
+      labelToggle.addEventListener("change", (e) => {
+        const target = e.target as HTMLInputElement;
+        const button = target.closest(".menu-btn");
+
+        console.log("Label toggle clicked:", {
+          checked: target.checked,
+          button: button?.className,
+          hasVisualizer: !!this.connections?.connectionVisualizer,
+        });
+
+        if (this.connections?.connectionVisualizer) {
+          console.log("Calling setGlobalLabelVisibility:", target.checked);
+          this.connections.connectionVisualizer.setGlobalLabelVisibility(
+            target.checked
+          );
+
+          // Update button state
+          if (button) {
+            console.log("Updating button state:", target.checked);
+            button.classList.toggle("active", target.checked);
+          }
+        }
+      });
+    }
 
     // Add event listeners
     const buttons = this.menu.querySelectorAll(".menu-btn");
-    const [hideBtn, isolateBtn, showAllBtn, connectionsBtn] = Array.from(buttons);
+    const [hideBtn, isolateBtn, showAllBtn, connectionsBtn] =
+      Array.from(buttons);
 
     if (hideBtn) {
-      hideBtn.addEventListener("click", () => this.viewer.toggleSelectedVisibility());
+      hideBtn.addEventListener("click", () => {
+        hideBtn.classList.toggle("active");
+        this.viewer.toggleSelectedVisibility();
+      });
     }
-    
+
     if (isolateBtn) {
-      isolateBtn.addEventListener("click", () => this.viewer.isolateSelected());
+      isolateBtn.addEventListener("click", () => {
+        isolateBtn.classList.toggle("active");
+        this.viewer.isolateSelected();
+      });
     }
-    
+
     if (showAllBtn) {
       showAllBtn.addEventListener("click", () => this.viewer.showAll());
     }
-    
+
     if (connectionsBtn) {
       connectionsBtn.addEventListener("click", () => {
-        // Toggle connections section visibility
-        const connectionsSection = document.querySelector<HTMLElement>(".connections-section");
+        const connectionsSection = document.querySelector<HTMLElement>(
+          ".connections-section"
+        );
+        const connectionControls = this.menu.querySelector(
+          ".connection-controls"
+        );
+        const visibilityBtns =
+          connectionControls?.querySelectorAll(".visibility-btn");
+
         if (connectionsSection) {
           const isHidden = connectionsSection.classList.toggle("hidden");
+          connectionsBtn.classList.toggle("active", !isHidden);
+          connectionControls?.classList.toggle("active", !isHidden);
+
           if (!isHidden) {
             this.connections.analyzeConnections();
+            visibilityBtns?.forEach((btn) => {
+              btn.removeAttribute("disabled");
+              btn.classList.remove("disabled");
+
+              // Initialize visibility states
+              const checkbox = btn.querySelector(
+                'input[type="checkbox"]'
+              ) as HTMLInputElement;
+              if (checkbox) {
+                const type = checkbox.dataset.type;
+                if (type) {
+                  this.connections.connectionVisualizer?.setTypeVisibility(
+                    type,
+                    checkbox.checked
+                  );
+                } else {
+                  // Handle label visibility
+                  this.connections.connectionVisualizer?.setGlobalLabelVisibility(
+                    checkbox.checked
+                  );
+                }
+                btn.classList.toggle("active", checkbox.checked);
+              }
+            });
           } else {
             this.connections.exitConnectionMode();
+            visibilityBtns?.forEach((btn) => {
+              btn.setAttribute("disabled", "");
+              btn.classList.add("disabled");
+              btn.classList.remove("active");
+            });
           }
         }
       });
@@ -73,72 +285,31 @@ export class FloatingMenu {
         <div class="section-header">
           <h3>Connections</h3>
         </div>
-        <div class="connection-filters">
-          <div class="filter-group">
-            <label>Visibility Controls</label>
-            <div class="visibility-controls">
-              <label><input type="checkbox" class="type-toggle" data-type="point" checked> Point</label>
-              <label><input type="checkbox" class="type-toggle" data-type="line" checked> Line</label>
-              <label><input type="checkbox" class="type-toggle" data-type="surface" checked> Surface</label>
-            </div>
-            <div class="label-control">
-              <label><input type="checkbox" id="show-labels"> Show All Labels</label>
-            </div>
-          </div>
-        </div>
         <div class="connections-list"></div>
       `;
 
       modelsContent.appendChild(connectionsSection);
-
-      // Add event listeners for visibility controls
-      const typeToggles = connectionsSection.querySelectorAll<HTMLInputElement>(".type-toggle");
-      typeToggles.forEach((toggle) => {
-        toggle.addEventListener("change", (e) => {
-          const target = e.target as HTMLInputElement;
-          const type = target.dataset.type;
-          if (this.connections.connectionVisualizer && type) {
-            this.connections.connectionVisualizer.setTypeVisibility(
-              type,
-              target.checked
-            );
-          }
-        });
-      });
-
-      // Add event listener for label visibility
-      const labelToggle = connectionsSection.querySelector<HTMLInputElement>("#show-labels");
-      if (labelToggle) {
-        labelToggle.addEventListener("change", (e) => {
-          const target = e.target as HTMLInputElement;
-          if (this.connections.connectionVisualizer) {
-            this.connections.connectionVisualizer.setGlobalLabelVisibility(
-              target.checked
-            );
-          }
-        });
-      }
     }
   }
 
   private async handleAnalyzeConnections(): Promise<void> {
     try {
-      const analyzeBtn = this.menu?.querySelector('.analyze-btn');
+      const analyzeBtn = this.menu?.querySelector(".analyze-btn");
       if (!analyzeBtn) return;
 
-      analyzeBtn.classList.add('loading');
+      analyzeBtn.classList.add("loading");
       analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-      
+
       await this.viewer.getConnections().analyzeConnections();
-      
-      analyzeBtn.classList.remove('loading');
+
+      analyzeBtn.classList.remove("loading");
       analyzeBtn.innerHTML = '<i class="fas fa-project-diagram"></i>';
     } catch (error) {
-      const analyzeBtn = this.menu?.querySelector('.analyze-btn');
+      const analyzeBtn = this.menu?.querySelector(".analyze-btn");
       if (analyzeBtn) {
-        analyzeBtn.classList.remove('loading');
+        analyzeBtn.classList.remove("loading");
         analyzeBtn.innerHTML = '<i class="fas fa-exclamation-circle"></i>';
-        
+
         // Reset button after delay
         setTimeout(() => {
           analyzeBtn.innerHTML = '<i class="fas fa-project-diagram"></i>';
@@ -146,4 +317,4 @@ export class FloatingMenu {
       }
     }
   }
-} 
+}

@@ -1,18 +1,5 @@
 import * as THREE from "three";
-import { IFCModel } from "./types";
-
-interface IntersectionResult {
-  type: "point" | "line" | "surface";
-  measurements: {
-    area?: number;
-    length?: number;
-  };
-  geometry: {
-    points?: THREE.BufferGeometry;
-    lines?: THREE.BufferGeometry;
-    surface?: THREE.BufferGeometry;
-  };
-}
+import { IFCModel, IntersectionResult } from "./types";
 
 export class FastIntersectionDetector {
   private raycaster: THREE.Raycaster;
@@ -26,7 +13,6 @@ export class FastIntersectionDetector {
   }
 
   public setupBoundingBoxes(model: IFCModel): void {
-    // Store meshes for intersection testing
     model.traverse((object) => {
       if ((object as THREE.Mesh).isMesh) {
         this.meshes.push(object as THREE.Mesh);
@@ -37,8 +23,7 @@ export class FastIntersectionDetector {
   public async findIntersection(
     obj1: THREE.Object3D,
     obj2: THREE.Object3D
-  ): Promise<any> {
-    // Get all meshes from both elements
+  ): Promise<IntersectionResult | null> {
     const meshesA: THREE.Mesh[] = [];
     const meshesB: THREE.Mesh[] = [];
 
@@ -47,36 +32,41 @@ export class FastIntersectionDetector {
         meshesA.push(child as THREE.Mesh);
       }
     });
-
     obj2.traverse((child) => {
       if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).geometry) {
         meshesB.push(child as THREE.Mesh);
       }
     });
-
     if (meshesA.length === 0 || meshesB.length === 0) return null;
 
-    // Quick AABB check first
+    // First, perform a bounding box check with a 5mm tolerance
+    const touchingThreshold = 0.005; // 5mm tolerance
     const boxA = new THREE.Box3().setFromObject(obj1);
     const boxB = new THREE.Box3().setFromObject(obj2);
-
-    if (!boxA.intersectsBox(boxB)) return null;
-
-    // Check intersections between all mesh pairs
-    const allIntersectionPoints: THREE.Vector3[] = [];
-
-    for (const meshA of meshesA) {
-      for (const meshB of meshesB) {
-        const intersectionPoints = this.raycastIntersection(meshA, meshB);
-        if (intersectionPoints && intersectionPoints.length > 0) {
-          allIntersectionPoints.push(...intersectionPoints);
-        }
+    if (!boxA.intersectsBox(boxB)) {
+      // Even if the boxes do not intersect, check whether their centers are very close
+      const centerA = boxA.getCenter(new THREE.Vector3());
+      const centerB = boxB.getCenter(new THREE.Vector3());
+      if (centerA.distanceTo(centerB) > touchingThreshold) {
+        return null;
       }
     }
 
+    // Perform raycasting between all mesh pairs
+    const allIntersectionPoints: THREE.Vector3[] = [];
+    for (const meshA of meshesA) {
+      for (const meshB of meshesB) {
+        const pts = this.raycastIntersection(meshA, meshB);
+        if (pts && pts.length > 0) {
+          allIntersectionPoints.push(...pts);
+        }
+      }
+    }
     if (allIntersectionPoints.length === 0) return null;
 
-    return this.createIntersectionVisualization(allIntersectionPoints);
+    // Create visualization geometries
+    const result = this.createIntersectionVisualization(allIntersectionPoints);
+    return result;
   }
 
   private raycastIntersection(
@@ -89,7 +79,7 @@ export class FastIntersectionDetector {
     const v = new THREE.Vector3();
     const positionA = meshA.geometry.attributes.position;
 
-    // Define ray directions
+    // Define six principal ray directions
     const rayDirections = [
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(-1, 0, 0),
@@ -99,175 +89,305 @@ export class FastIntersectionDetector {
       new THREE.Vector3(0, 0, -1),
     ];
 
-    // Sample vertices
-    const stride = Math.max(1, Math.floor(positionA.count / 100)); // Sample up to 100 points
-
+    // Sample vertices (up to 100 points)
+    const stride = Math.max(1, Math.floor(positionA.count / 100));
     for (let i = 0; i < positionA.count; i += stride) {
       v.fromBufferAttribute(positionA, i);
       v.applyMatrix4(meshA.matrixWorld);
-
       for (const direction of rayDirections) {
         this.raycaster.set(v, direction);
+        // We limit the ray distance to the tolerance if needed
+        this.raycaster.far = 0.01; // 1cm to catch near-contacts
         const intersects = this.raycaster.intersectObject(meshB);
-
         if (intersects.length > 0) {
           intersectionPoints.push(intersects[0].point.clone());
         }
       }
     }
-
     return intersectionPoints;
   }
 
-  private createIntersectionVisualization(points: THREE.Vector3[]): any {
-    if (points.length === 0) return null;
-
-    // Remove duplicate points and validate
+  private createIntersectionVisualization(
+    points: THREE.Vector3[]
+  ): IntersectionResult | null {
+    // Deduplicate points (within a 1cm threshold for safety)
     const uniquePoints: THREE.Vector3[] = [];
-    const threshold = 0.01; // 1cm threshold
-
+    const dedupTolerance = 0.001; // 1mm deduplication tolerance
     for (const point of points) {
       if (isNaN(point.x) || isNaN(point.y) || isNaN(point.z)) continue;
-
-      let isDuplicate = false;
-      for (const uniquePoint of uniquePoints) {
-        if (point.distanceTo(uniquePoint) < threshold) {
-          isDuplicate = true;
+      let duplicate = false;
+      for (const up of uniquePoints) {
+        if (point.distanceTo(up) < dedupTolerance) {
+          duplicate = true;
           break;
         }
       }
-      if (!isDuplicate) {
-        uniquePoints.push(point);
-      }
+      if (!duplicate) uniquePoints.push(point);
     }
-
     if (uniquePoints.length === 0) return null;
 
-    // Create point cloud geometry
-    const pointsGeometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(
-      uniquePoints.flatMap((p) => [p.x, p.y, p.z])
-    );
-    pointsGeometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(positions, 3)
-    );
+    // Use 5mm as the tolerance for "touching" detection
+    const tolerance = 0.005;
 
-    // Create lines geometry
-    const linePoints: number[] = [];
-    for (let i = 0; i < uniquePoints.length - 1; i++) {
-      linePoints.push(
-        uniquePoints[i].x,
-        uniquePoints[i].y,
-        uniquePoints[i].z,
-        uniquePoints[i + 1].x,
-        uniquePoints[i + 1].y,
-        uniquePoints[i + 1].z
+    // If only one unique point exists, return a point connection
+    if (uniquePoints.length === 1) {
+      const pointsGeometry = new THREE.BufferGeometry();
+      const posArray = new Float32Array([
+        uniquePoints[0].x,
+        uniquePoints[0].y,
+        uniquePoints[0].z,
+      ]);
+      pointsGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(posArray, 3)
       );
+      return {
+        type: "point",
+        geometry: { points: pointsGeometry },
+        measurements: {},
+      };
     }
-    const lineGeometry = new THREE.BufferGeometry();
-    lineGeometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(linePoints, 3)
-    );
 
-    // Create surface geometry
-    let surfaceGeometry: THREE.BufferGeometry | null = null;
-    if (uniquePoints.length >= 3) {
-      try {
-        // Create triangles for surface
-        const vertices: number[] = [];
-        const indices: number[] = [];
-        const center = new THREE.Vector3();
-
-        // Calculate center point
-        uniquePoints.forEach((p) => center.add(p));
-        center.divideScalar(uniquePoints.length);
-
-        // Create triangles fan from center
-        vertices.push(center.x, center.y, center.z);
-        for (let i = 0; i < uniquePoints.length; i++) {
-          const point = uniquePoints[i];
-          vertices.push(point.x, point.y, point.z);
-
-          if (i > 0) {
-            indices.push(
-              0, // center point
-              i, // current point
-              i + 1 > uniquePoints.length ? 1 : i + 1 // next point or wrap to first
-            );
-          }
+    // Find the two points with maximum separation
+    let p1 = uniquePoints[0],
+      p2 = uniquePoints[0];
+    let maxDist = 0;
+    for (let i = 0; i < uniquePoints.length; i++) {
+      for (let j = i + 1; j < uniquePoints.length; j++) {
+        const d = uniquePoints[i].distanceTo(uniquePoints[j]);
+        if (d > maxDist) {
+          maxDist = d;
+          p1 = uniquePoints[i];
+          p2 = uniquePoints[j];
         }
-
-        surfaceGeometry = new THREE.BufferGeometry();
-        surfaceGeometry.setAttribute(
-          "position",
-          new THREE.Float32BufferAttribute(vertices, 3)
-        );
-        surfaceGeometry.setIndex(indices);
-        surfaceGeometry.computeVertexNormals();
-
-        // Validate geometry
-        if (
-          !surfaceGeometry.boundingSphere ||
-          isNaN(surfaceGeometry.boundingSphere.radius)
-        ) {
-          surfaceGeometry = null;
-        }
-      } catch (error) {
-        console.warn("Failed to create surface geometry:", error);
-        surfaceGeometry = null;
       }
     }
 
-    // Determine type based on geometry
-    let type: "point" | "line" | "surface";
-    if (uniquePoints.length <= 2) {
-      type = "point";
-    } else if (!surfaceGeometry || uniquePoints.length <= 4) {
-      type = "line";
+    // If the two most distant points are very close, treat the connection as a point
+    if (maxDist < tolerance) {
+      const pointsGeometry = new THREE.BufferGeometry();
+      const posArray = new Float32Array([p1.x, p1.y, p1.z]);
+      pointsGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(posArray, 3)
+      );
+      return {
+        type: "point",
+        geometry: { points: pointsGeometry },
+        measurements: {},
+      };
+    }
+
+    // Check collinearity: for each unique point, compute its distance from the line (p1, p2)
+    const lineDir = new THREE.Vector3().subVectors(p2, p1).normalize();
+    let maxDeviation = 0;
+    for (const pt of uniquePoints) {
+      const v = new THREE.Vector3().subVectors(pt, p1);
+      const projLen = v.dot(lineDir);
+      const projPt = new THREE.Vector3()
+        .copy(lineDir)
+        .multiplyScalar(projLen)
+        .add(p1);
+      const deviation = pt.distanceTo(projPt);
+      if (deviation > maxDeviation) maxDeviation = deviation;
+    }
+
+    // If points lie nearly along a line, create a linear connection
+    if (maxDeviation < tolerance) {
+      const lineGeometry = new THREE.BufferGeometry();
+      const linePos = new Float32Array([p1.x, p1.y, p1.z, p2.x, p2.y, p2.z]);
+      lineGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(linePos, 3)
+      );
+
+      return {
+        type: "line",
+        geometry: { lines: lineGeometry },
+        measurements: { length: maxDist },
+      };
+    }
+
+    // Otherwise, assume a surface connection. Find a third point that is not collinear
+    let p3: THREE.Vector3 | null = null;
+    for (const candidate of uniquePoints) {
+      if (candidate === p1 || candidate === p2) continue;
+      const v = new THREE.Vector3().subVectors(candidate, p1);
+      const projLen = v.dot(lineDir);
+      const projPt = new THREE.Vector3()
+        .copy(lineDir)
+        .multiplyScalar(projLen)
+        .add(p1);
+      if (candidate.distanceTo(projPt) > tolerance) {
+        p3 = candidate;
+        break;
+      }
+    }
+
+    // If all points are nearly collinear, fall back to a line
+    if (!p3) {
+      const lineGeometry = new THREE.BufferGeometry();
+      const linePos = new Float32Array([p1.x, p1.y, p1.z, p2.x, p2.y, p2.z]);
+      lineGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(linePos, 3)
+      );
+      return {
+        type: "line",
+        geometry: { lines: lineGeometry },
+        measurements: { length: maxDist },
+      };
+    }
+
+    // For surface connections, create proper triangulation
+    if (uniquePoints.length === 4) {
+      // Order points to form a proper rectangle
+      const orderedPoints = this.orderPointsForRectangle(uniquePoints);
+      const vertices: number[] = [];
+      const indices = [0, 1, 2, 2, 3, 0]; // Fixed triangulation for ordered points
+
+      // Add vertices in the correct order
+      orderedPoints.forEach((p) => {
+        vertices.push(p.x, p.y, p.z);
+      });
+
+      const surfaceGeometry = new THREE.BufferGeometry();
+      surfaceGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(vertices, 3)
+      );
+      surfaceGeometry.setIndex(indices);
+      surfaceGeometry.computeVertexNormals();
+
+      // Calculate area using ordered points
+      const area = this.calculateQuadArea(orderedPoints);
+
+      // Create point geometry for visualization
+      const pointsGeometry = new THREE.BufferGeometry();
+      pointsGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(vertices, 3)
+      );
+
+      return {
+        type: "surface",
+        geometry: { points: pointsGeometry, surface: surfaceGeometry },
+        measurements: { area },
+      };
     } else {
-      type = "surface";
-    }
-
-    return {
-      type,
-      points: pointsGeometry,
-      lines: lineGeometry,
-      surface: surfaceGeometry,
-      measurements: this.calculateMeasurements(uniquePoints),
-    };
-  }
-
-  private calculateMeasurements(points: THREE.Vector3[]): any {
-    const measurements: any = {};
-
-    // Calculate length (sum of segments)
-    let length = 0;
-    for (let i = 0; i < points.length - 1; i++) {
-      length += points[i].distanceTo(points[i + 1]);
-    }
-    measurements.length = length;
-
-    // Calculate area if we have enough points
-    if (points.length >= 3) {
-      let area = 0;
+      // For other point counts, use existing triangle fan approach
+      const vertices: number[] = [];
+      const indices: number[] = [];
       const center = new THREE.Vector3();
-      points.forEach((p) => center.add(p));
-      center.divideScalar(points.length);
+      uniquePoints.forEach((p) => center.add(p));
+      center.divideScalar(uniquePoints.length);
 
-      // Calculate area using triangles from center point
-      for (let i = 0; i < points.length; i++) {
-        const p1 = points[i];
-        const p2 = points[(i + 1) % points.length];
-        const v1 = new THREE.Vector3().subVectors(p1, center);
-        const v2 = new THREE.Vector3().subVectors(p2, center);
+      // Add center point as first vertex
+      vertices.push(center.x, center.y, center.z);
+      for (let i = 0; i < uniquePoints.length; i++) {
+        const pt = uniquePoints[i];
+        vertices.push(pt.x, pt.y, pt.z);
+        if (i > 0) {
+          indices.push(0, i, i + 1 < uniquePoints.length ? i + 1 : 1);
+        }
+      }
+
+      const surfaceGeometry = new THREE.BufferGeometry();
+      surfaceGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(vertices, 3)
+      );
+      surfaceGeometry.setIndex(indices);
+      surfaceGeometry.computeVertexNormals();
+
+      // Calculate area
+      let area = 0;
+      for (let i = 0; i < uniquePoints.length; i++) {
+        const ptA = uniquePoints[i];
+        const ptB = uniquePoints[(i + 1) % uniquePoints.length];
+        const v1 = new THREE.Vector3().subVectors(ptA, center);
+        const v2 = new THREE.Vector3().subVectors(ptB, center);
         area += v1.cross(v2).length() / 2;
       }
-      measurements.area = area;
-    }
 
-    return measurements;
+      // Create point geometry for visualization
+      const pointsGeometry = new THREE.BufferGeometry();
+      const posArray = new Float32Array(
+        uniquePoints.flatMap((pt) => [pt.x, pt.y, pt.z])
+      );
+      pointsGeometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(posArray, 3)
+      );
+
+      return {
+        type: "surface",
+        geometry: { points: pointsGeometry, surface: surfaceGeometry },
+        measurements: { area },
+      };
+    }
+  }
+
+  private orderPointsForRectangle(points: THREE.Vector3[]): THREE.Vector3[] {
+    if (points.length !== 4) return points;
+
+    // Find the center point
+    const center = new THREE.Vector3();
+    points.forEach((p) => center.add(p));
+    center.divideScalar(4);
+
+    // Calculate the primary plane normal using the first three points
+    const v1 = new THREE.Vector3().subVectors(points[1], points[0]);
+    const v2 = new THREE.Vector3().subVectors(points[2], points[0]);
+    const normal = new THREE.Vector3().crossVectors(v1, v2).normalize();
+
+    // Project points onto a plane and get angles
+    const projectedPoints = points.map((p) => {
+      const v = new THREE.Vector3().subVectors(p, center);
+      const projected = v.projectOnPlane(normal);
+      const angle = Math.atan2(projected.y, projected.x);
+      return { point: p, angle };
+    });
+
+    // Sort points by angle
+    projectedPoints.sort((a, b) => a.angle - b.angle);
+
+    // Return points in clockwise order
+    return projectedPoints.map((p) => p.point);
+  }
+
+  private calculateQuadArea(orderedPoints: THREE.Vector3[]): number {
+    if (orderedPoints.length !== 4) return 0;
+
+    // Calculate area using cross product method for a quad
+    const diagonal1 = new THREE.Vector3().subVectors(
+      orderedPoints[2],
+      orderedPoints[0]
+    );
+    const diagonal2 = new THREE.Vector3().subVectors(
+      orderedPoints[3],
+      orderedPoints[1]
+    );
+
+    return diagonal1.cross(diagonal2).length() / 2;
+  }
+
+  private calculateSurfaceArea(
+    points: THREE.Vector3[],
+    indices: number[]
+  ): number {
+    let area = 0;
+    for (let i = 0; i < indices.length; i += 3) {
+      const p1 = points[indices[i]];
+      const p2 = points[indices[i + 1]];
+      const p3 = points[indices[i + 2]];
+
+      // Calculate triangle area using cross product
+      const v1 = new THREE.Vector3().subVectors(p2, p1);
+      const v2 = new THREE.Vector3().subVectors(p3, p1);
+      area += v1.cross(v2).length() / 2;
+    }
+    return area;
   }
 }
 
@@ -276,118 +396,33 @@ export class IntersectionVisualizer {
   private camera: THREE.Camera;
   private lastCameraPosition: THREE.Vector3;
   private lastCameraQuaternion: THREE.Quaternion;
-  private updateThreshold: number = 0.01; // Threshold for camera movement
+  private updateThreshold: number = 0.01;
   private animationFrameId: number | null = null;
-  public colors: Record<string, string> = {
-    surface: "#4CAF50",
-    line: "#2196F3",
-    point: "#FFC107",
-  };
-  public showLabelsGlobal: boolean = false;
-  private materials: Record<string, any>;
-  private activeMode: boolean;
   private visualizations: Map<string, any>;
+  private activeMode: boolean;
+  public showLabelsGlobal: boolean;
+
+  public colors = {
+    surface: "#4CAF50", // Green
+    line: "#2196F3", // Blue
+    point: "#FFC107", // Amber
+  };
+
+  private typeVisibility: Record<string, boolean> = {
+    surface: true,
+    line: true,
+    point: true,
+  };
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.scene = scene;
     this.camera = camera;
     this.lastCameraPosition = camera.position.clone();
     this.lastCameraQuaternion = camera.quaternion.clone();
-
-    // Start continuous camera tracking
-    this.startCameraTracking();
-    this.setupMaterials();
-    this.activeMode = false;
     this.visualizations = new Map();
-  }
-
-  private setupMaterials(): void {
-    this.materials = {
-      point: {
-        normal: new THREE.PointsMaterial({
-          color: this.colors.point,
-          size: 0.05,
-          transparent: true,
-          opacity: 0.8,
-          sizeAttenuation: false,
-        }),
-        highlight: new THREE.PointsMaterial({
-          color: this.colors.point,
-          size: 0.1,
-          transparent: true,
-          opacity: 1,
-          sizeAttenuation: false,
-        }),
-      },
-      line: {
-        normal: new THREE.LineBasicMaterial({
-          color: this.colors.line,
-          transparent: true,
-          opacity: 0.8,
-          linewidth: 1,
-        }),
-        highlight: new THREE.LineBasicMaterial({
-          color: this.colors.line,
-          transparent: true,
-          opacity: 1,
-          linewidth: 2,
-        }),
-      },
-      surface: {
-        normal: new THREE.MeshPhongMaterial({
-          color: this.colors.surface,
-          transparent: true,
-          opacity: 0.3,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        }),
-        highlight: new THREE.MeshPhongMaterial({
-          color: this.colors.surface,
-          transparent: true,
-          opacity: 0.6,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-          shininess: 100,
-          specular: 0xffffff,
-          emissive: this.colors.surface,
-          emissiveIntensity: 0.3,
-        }),
-      },
-    };
-  }
-
-  private startCameraTracking(): void {
-    const checkCameraMovement = () => {
-      if (this.showLabelsGlobal) {
-        // Check if camera has moved enough
-        const positionDelta = this.camera.position.distanceTo(
-          this.lastCameraPosition
-        );
-        const rotationDelta = this.camera.quaternion.angleTo(
-          this.lastCameraQuaternion
-        );
-
-        if (
-          positionDelta > this.updateThreshold ||
-          rotationDelta > this.updateThreshold
-        ) {
-          this.updateLabels();
-          // Update last known position/rotation
-          this.lastCameraPosition.copy(this.camera.position);
-          this.lastCameraQuaternion.copy(this.camera.quaternion);
-        }
-      }
-
-      this.animationFrameId = requestAnimationFrame(checkCameraMovement);
-    };
-
-    checkCameraMovement();
-  }
-
-  public dispose(): void {
-    if (this.animationFrameId !== null) {
-      cancelAnimationFrame(this.animationFrameId);
-    }
+    this.activeMode = false;
+    this.showLabelsGlobal = false;
+    this.startCameraTracking();
   }
 
   public setConnectionMode(active: boolean): void {
@@ -398,75 +433,67 @@ export class IntersectionVisualizer {
   public createVisualization(data: {
     id: string;
     type: string;
-    color: THREE.Color;
-    points: THREE.Vector3[];
-    lines: THREE.Line3[];
-    surface: THREE.BufferGeometry | null;
-    measurements?: any;
-    elements?: { expressID: number; name?: string }[];
+    geometry: {
+      points?: THREE.BufferGeometry;
+      lines?: THREE.BufferGeometry;
+      surface?: THREE.BufferGeometry;
+    };
+    measurements?: {
+      area?: number;
+      length?: number;
+    };
   }): any {
     const visualization: any = {
       id: data.id,
       type: data.type,
+      visible: true,
     };
 
-    // Create points visualization
-    if (data.points.length > 0) {
+    // Create points visualization using spheres
+    if (data.geometry?.points) {
       const pointGroup = new THREE.Group();
-      const sphereGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+      // Adjust sphere size based on connection type
+      const sphereSize = data.type === "point" ? 0.1 : 0.025; // Double size for point connections, half for others
+      const sphereGeometry = new THREE.SphereGeometry(sphereSize, 16, 16);
+
+      // Use different colors based on connection type
+      const pointColor =
+        data.type === "point" ? this.colors.point : this.colors.surface;
       const pointMaterial = new THREE.MeshPhongMaterial({
-        color: this.colors.point,
+        color: pointColor,
         transparent: true,
         opacity: 0.8,
         shininess: 100,
         specular: 0xffffff,
       });
 
-      data.points.forEach((point) => {
+      const positions = data.geometry.points.getAttribute("position");
+      for (let i = 0; i < positions.count; i++) {
+        const point = new THREE.Vector3().fromBufferAttribute(positions, i);
         const sphere = new THREE.Mesh(sphereGeometry, pointMaterial);
         sphere.position.copy(point);
         pointGroup.add(sphere);
-      });
+      }
 
       visualization.points = pointGroup;
       this.scene.add(pointGroup);
     }
 
     // Create lines visualization
-    if (data.lines.length > 0) {
-      const lineGeometry = new THREE.BufferGeometry();
-      const positions: number[] = [];
-
-      data.lines.forEach((line) => {
-        positions.push(
-          line.start.x,
-          line.start.y,
-          line.start.z,
-          line.end.x,
-          line.end.y,
-          line.end.z
-        );
-      });
-
-      lineGeometry.setAttribute(
-        "position",
-        new THREE.Float32BufferAttribute(positions, 3)
-      );
-
+    if (data.geometry?.lines) {
       const lineMaterial = new THREE.LineBasicMaterial({
         color: this.colors.line,
+        linewidth: 2,
         transparent: true,
         opacity: 0.8,
-        linewidth: 2,
       });
-
-      const lineSegments = new THREE.LineSegments(lineGeometry, lineMaterial);
-      visualization.lines = lineSegments;
-      this.scene.add(lineSegments);
+      const lines = new THREE.LineSegments(data.geometry.lines, lineMaterial);
+      visualization.lines = lines;
+      this.scene.add(lines);
     }
 
     // Create surface visualization
-    if (data.surface) {
+    if (data.geometry?.surface) {
       const surfaceMaterial = new THREE.MeshPhongMaterial({
         color: this.colors.surface,
         transparent: true,
@@ -476,208 +503,100 @@ export class IntersectionVisualizer {
         shininess: 100,
         specular: 0xffffff,
       });
-
-      const surfaceMesh = new THREE.Mesh(data.surface, surfaceMaterial);
-      visualization.surface = surfaceMesh;
-      this.scene.add(surfaceMesh);
+      const surface = new THREE.Mesh(data.geometry.surface, surfaceMaterial);
+      visualization.surface = surface;
+      this.scene.add(surface);
 
       // Add wireframe
       const wireframeMaterial = new THREE.LineBasicMaterial({
         color: this.colors.surface,
         transparent: true,
         opacity: 0.5,
-        linewidth: 2,
       });
-
-      const wireframeGeometry = new THREE.WireframeGeometry(data.surface);
       const wireframe = new THREE.LineSegments(
-        wireframeGeometry,
+        new THREE.WireframeGeometry(data.geometry.surface),
         wireframeMaterial
       );
       visualization.wireframe = wireframe;
       this.scene.add(wireframe);
     }
 
-    // Create label with full data
-    const labelText = this.createLabelText(data.type, {
-      measurements: data.measurements,
-      elements: data.elements,
-    });
-    if (labelText) {
-      const label = this.createLabel(labelText);
-      const center = this.calculateCenter(data.points);
-      label.position.copy(center);
-      label.position.y += 0.1;
-      label.visible = this.showLabelsGlobal;
-      label.userData.type = "connection-label";
-      label.userData.target = center;
-      visualization.label = label;
-      this.scene.add(label);
-    }
-
+    // Store visualization
     this.visualizations.set(data.id, visualization);
     return visualization;
   }
 
-  private createLabel(text: string): THREE.Sprite {
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Could not get canvas context");
-
-    const lines = text.split("\n");
-    const lineHeight = 24; // Increased line height
-    const padding = 16; // Increased padding
-
-    // Calculate required canvas height based on number of lines
-    const height = lines.length * lineHeight + padding * 2;
-
-    // Set canvas size (increased for better resolution)
-    canvas.width = 400;
-    canvas.height = height;
-
-    // Style the background
-    context.fillStyle = "rgba(255, 255, 255, 0.9)"; // More opaque background
-    context.strokeStyle = "#666666";
-    context.lineWidth = 2;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeRect(0, 0, canvas.width, canvas.height);
-
-    // Style and position each line with larger fonts
-    let y = padding + lineHeight / 2;
-    lines.forEach((line, index) => {
-      context.font = index === 0 ? "bold 28px Arial" : "24px Arial"; // Larger fonts
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillStyle = "#222222"; // Darker text for better contrast
-      context.fillText(line, canvas.width / 2, y);
-      y += lineHeight;
+  public clear(): void {
+    console.log("Clearing visualizations");
+    this.visualizations.forEach((vis) => {
+      if (vis.points) {
+        console.log("Clearing points");
+        vis.points.children.forEach((sphere: THREE.Mesh) => {
+          sphere.geometry.dispose();
+          (sphere.material as THREE.Material).dispose();
+        });
+        this.scene.remove(vis.points);
+      }
+      if (vis.lines) {
+        console.log("Clearing lines");
+        vis.lines.geometry.dispose();
+        (vis.lines.material as THREE.Material).dispose();
+        this.scene.remove(vis.lines);
+      }
+      if (vis.surface) {
+        console.log("Clearing surface");
+        vis.surface.geometry.dispose();
+        (vis.surface.material as THREE.Material).dispose();
+        this.scene.remove(vis.surface);
+        if (vis.wireframe) {
+          vis.wireframe.geometry.dispose();
+          (vis.wireframe.material as THREE.Material).dispose();
+          this.scene.remove(vis.wireframe);
+        }
+      }
     });
+    this.visualizations.clear();
+  }
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.minFilter = THREE.LinearFilter; // Better scaling quality
-    texture.magFilter = THREE.LinearFilter;
-
-    const spriteMaterial = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-      sizeAttenuation: true, // Enable size attenuation
+  private updateVisibility(): void {
+    this.visualizations.forEach((vis) => {
+      const isTypeVisible = this.typeVisibility[vis.type];
+      if (vis.points) {
+        vis.points.visible = this.activeMode && isTypeVisible;
+        vis.points.children.forEach((sphere: THREE.Mesh) => {
+          sphere.visible = this.activeMode && isTypeVisible;
+        });
+      }
+      if (vis.lines) {
+        vis.lines.visible = this.activeMode && isTypeVisible;
+      }
+      if (vis.surface) {
+        vis.surface.visible = this.activeMode && isTypeVisible;
+        if (vis.wireframe) {
+          vis.wireframe.visible = this.activeMode && isTypeVisible;
+        }
+      }
     });
-
-    const sprite = new THREE.Sprite(spriteMaterial);
-    // Base scale adjusted for better visibility
-    const aspectRatio = height / canvas.width;
-    sprite.scale.set(1.0, 1.0 * aspectRatio, 1);
-    return sprite;
   }
 
-  private createLabelText(type: string, data: any): string {
-    let text = "";
-
-    // Add connection type
-    text += type.charAt(0).toUpperCase() + type.slice(1) + " Connection";
-
-    // Add measurements with units
-    if (data.measurements) {
-      if (type === "surface" && data.measurements.area) {
-        text += `\nArea: ${data.measurements.area.toFixed(2)} m²`;
-      } else if (type === "line" && data.measurements.length) {
-        text += `\nLength: ${data.measurements.length.toFixed(2)} m`;
+  private startCameraTracking(): void {
+    const animate = () => {
+      if (
+        this.camera.position.distanceTo(this.lastCameraPosition) >
+          this.updateThreshold ||
+        this.camera.quaternion.angleTo(this.lastCameraQuaternion) >
+          this.updateThreshold
+      ) {
+        this.lastCameraPosition.copy(this.camera.position);
+        this.lastCameraQuaternion.copy(this.camera.quaternion);
+        this.updateLabels();
       }
-    }
-
-    // Add elements info if available
-    if (data.elements && data.elements.length === 2) {
-      const elem1 = data.elements[0];
-      const elem2 = data.elements[1];
-      text += `\n${elem1.name} ↔ ${elem2.name}`;
-    }
-
-    return text;
+      this.animationFrameId = requestAnimationFrame(animate);
+    };
+    animate();
   }
 
-  private calculateCenter(points: THREE.Vector3[]): THREE.Vector3 {
-    const center = new THREE.Vector3();
-    points.forEach((point) => center.add(point));
-    return center.divideScalar(points.length);
-  }
-
-  public highlight(visualization: any): void {
-    if (!visualization) return;
-
-    // Highlight points
-    if (visualization.points) {
-      visualization.points.children.forEach((sphere: THREE.Mesh) => {
-        (sphere.material as THREE.MeshPhongMaterial).opacity = 1;
-        sphere.scale.setScalar(1.5); // Make spheres bigger when highlighted
-      });
-    }
-
-    // Highlight lines
-    if (visualization.lines) {
-      (visualization.lines.material as THREE.LineBasicMaterial).opacity = 1;
-      (visualization.lines.material as THREE.LineBasicMaterial).linewidth = 3;
-    }
-
-    // Highlight surface
-    if (visualization.surface) {
-      (visualization.surface.material as THREE.MeshPhongMaterial).opacity = 0.5;
-      if (visualization.wireframe) {
-        (
-          visualization.wireframe.material as THREE.LineBasicMaterial
-        ).opacity = 0.8;
-        (
-          visualization.wireframe.material as THREE.LineBasicMaterial
-        ).linewidth = 3;
-      }
-    }
-  }
-
-  public unhighlight(visualization: any): void {
-    if (!visualization) return;
-
-    // Reset points
-    if (visualization.points) {
-      visualization.points.children.forEach((sphere: THREE.Mesh) => {
-        (sphere.material as THREE.MeshPhongMaterial).opacity = 0.8;
-        sphere.scale.setScalar(1.0);
-      });
-    }
-
-    // Reset lines
-    if (visualization.lines) {
-      (visualization.lines.material as THREE.LineBasicMaterial).opacity = 0.8;
-      (visualization.lines.material as THREE.LineBasicMaterial).linewidth = 2;
-    }
-
-    // Reset surface
-    if (visualization.surface) {
-      (visualization.surface.material as THREE.MeshPhongMaterial).opacity = 0.3;
-      if (visualization.wireframe) {
-        (
-          visualization.wireframe.material as THREE.LineBasicMaterial
-        ).opacity = 0.5;
-        (
-          visualization.wireframe.material as THREE.LineBasicMaterial
-        ).linewidth = 2;
-      }
-    }
-  }
-
-  public showLabels(visualization: any): void {
-    if (visualization.label) {
-      visualization.label.visible = true;
-    }
-  }
-
-  public hideLabels(visualization: any): void {
-    if (visualization.label) {
-      visualization.label.visible = false;
-    }
-  }
-
-  public updateLabels(): void {
+  private updateLabels(): void {
     if (!this.showLabelsGlobal) return;
 
     const camera = this.camera;
@@ -743,82 +662,167 @@ export class IntersectionVisualizer {
         const baseScale = 0.6; // Increased base scale (was 0.4)
         const minScale = 0.4; // Increased minimum scale (was 0.3)
         const maxScale = 2.0; // Increased maximum scale (was 1.2)
-        
+
         // Use cube root for more gradual scaling at distance
         const scale = Math.max(
           minScale,
           Math.min(maxScale, baseScale * Math.pow(distance, 0.33))
         );
-        
+
         // Apply scale while maintaining aspect ratio
         const baseScaleVector = label.scale.clone().normalize();
         label.scale.copy(baseScaleVector.multiplyScalar(scale));
-        
+
         // Make label face camera
         label.quaternion.copy(camera.quaternion);
       }
     });
   }
 
-  public clear(): void {
+  public highlight(visualization: any): void {
+    if (!visualization) return;
+
+    // Highlight points with different scales based on type
+    if (visualization.points) {
+      visualization.points.children.forEach((sphere: THREE.Mesh) => {
+        (sphere.material as THREE.MeshPhongMaterial).opacity = 1;
+        (sphere.material as THREE.MeshPhongMaterial).emissive.setHex(0x333333);
+        // Scale up more for point connections
+        const scaleMultiplier = visualization.type === "point" ? 1.5 : 1.2;
+        sphere.scale.setScalar(scaleMultiplier);
+      });
+    }
+
+    // Highlight lines
+    if (visualization.lines) {
+      (visualization.lines.material as THREE.LineBasicMaterial).opacity = 1;
+      (visualization.lines.material as THREE.LineBasicMaterial).linewidth = 3;
+    }
+
+    // Highlight surface
+    if (visualization.surface) {
+      (visualization.surface.material as THREE.MeshPhongMaterial).opacity = 0.6;
+      (
+        visualization.surface.material as THREE.MeshPhongMaterial
+      ).emissive.setHex(0x222222);
+
+      if (visualization.wireframe) {
+        (
+          visualization.wireframe.material as THREE.LineBasicMaterial
+        ).opacity = 0.8;
+        (
+          visualization.wireframe.material as THREE.LineBasicMaterial
+        ).linewidth = 2;
+      }
+    }
+  }
+
+  public unhighlight(visualization: any): void {
+    if (!visualization) return;
+
+    // Reset points
+    if (visualization.points) {
+      visualization.points.children.forEach((sphere: THREE.Mesh) => {
+        (sphere.material as THREE.MeshPhongMaterial).opacity = 0.8;
+        (sphere.material as THREE.MeshPhongMaterial).emissive.setHex(0);
+        sphere.scale.setScalar(1.0);
+      });
+    }
+
+    // Reset lines
+    if (visualization.lines) {
+      (visualization.lines.material as THREE.LineBasicMaterial).opacity = 0.8;
+      (visualization.lines.material as THREE.LineBasicMaterial).linewidth = 2;
+    }
+
+    // Reset surface
+    if (visualization.surface) {
+      (visualization.surface.material as THREE.MeshPhongMaterial).opacity = 0.3;
+      (
+        visualization.surface.material as THREE.MeshPhongMaterial
+      ).emissive.setHex(0);
+
+      if (visualization.wireframe) {
+        (
+          visualization.wireframe.material as THREE.LineBasicMaterial
+        ).opacity = 0.5;
+        (
+          visualization.wireframe.material as THREE.LineBasicMaterial
+        ).linewidth = 1;
+      }
+    }
+  }
+
+  public dispose(): void {
+    // Stop camera tracking
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+    }
+
+    // Clear all visualizations
+    this.clear();
+  }
+
+  public resetView(): void {
+    // Method kept for API compatibility but no longer resets camera
+    console.log("resetView called but camera position maintained");
+  }
+
+  public setTypeVisibility(type: string, visible: boolean): void {
+    console.log(`Setting ${type} visibility to ${visible}`, {
+      type,
+      visible,
+      activeMode: this.activeMode,
+      hasVisualizations: this.visualizations.size,
+    });
+
+    this.typeVisibility[type] = visible;
+
     this.visualizations.forEach((vis) => {
-      if (vis.points) this.scene.remove(vis.points);
-      if (vis.lines) this.scene.remove(vis.lines);
-      if (vis.surface) {
-        this.scene.remove(vis.surface);
-        if (vis.wireframe) this.scene.remove(vis.wireframe);
+      if (vis.type === type) {
+        console.log(`Processing visualization of type ${type}:`, {
+          hasPoints: !!vis.points,
+          hasLines: !!vis.lines,
+          hasSurface: !!vis.surface,
+        });
+
+        if (vis.points) {
+          vis.points.visible = visible && this.activeMode;
+          vis.points.children.forEach((sphere: THREE.Mesh) => {
+            sphere.visible = visible && this.activeMode;
+          });
+          console.log("Updated points visibility:", vis.points.visible);
+        }
+        if (vis.lines) {
+          vis.lines.visible = visible && this.activeMode;
+          console.log("Updated lines visibility:", vis.lines.visible);
+        }
+        if (vis.surface) {
+          vis.surface.visible = visible && this.activeMode;
+          if (vis.wireframe) {
+            vis.wireframe.visible = visible && this.activeMode;
+          }
+          console.log("Updated surface visibility:", vis.surface.visible);
+        }
       }
     });
-    this.visualizations.clear();
-  }
-
-  private updateVisibility(): void {
-    this.visualizations.forEach((vis) => {
-      vis.visible = this.activeMode;
-    });
-  }
-
-  public show(visualization: any): void {
-    if (visualization.points) {
-      visualization.points.visible = true;
-      visualization.points.children.forEach((sphere: THREE.Mesh) => {
-        sphere.visible = true;
-      });
-    }
-    if (visualization.lines) visualization.lines.visible = true;
-    if (visualization.surface) visualization.surface.visible = true;
-    if (visualization.wireframe) visualization.wireframe.visible = true;
-    if (visualization.label && this.showLabelsGlobal) {
-      visualization.label.visible = true;
-    }
-  }
-
-  public hide(visualization: any): void {
-    if (visualization.points) {
-      visualization.points.visible = false;
-      visualization.points.children.forEach((sphere: THREE.Mesh) => {
-        sphere.visible = false;
-      });
-    }
-    if (visualization.lines) visualization.lines.visible = false;
-    if (visualization.surface) visualization.surface.visible = false;
-    if (visualization.wireframe) visualization.wireframe.visible = false;
-    if (visualization.label) {
-      visualization.label.visible = false;
-    }
   }
 
   public setGlobalLabelVisibility(visible: boolean): void {
+    console.log(`Setting global label visibility to ${visible}`, {
+      visible,
+      hasVisualizations: this.visualizations.size,
+    });
+
     this.showLabelsGlobal = visible;
-    this.visualizations.forEach((visualization) => {
-      if (visualization.label) {
-        visualization.label.visible = visible;
+    this.visualizations.forEach((vis) => {
+      if (vis.label) {
+        vis.label.visible = visible;
+        console.log("Updated label visibility for visualization:", visible);
       }
     });
     if (visible) {
-      // Reset camera tracking when enabling labels
-      this.lastCameraPosition.copy(this.camera.position);
-      this.lastCameraQuaternion.copy(this.camera.quaternion);
+      console.log("Updating labels");
       this.updateLabels();
     }
   }

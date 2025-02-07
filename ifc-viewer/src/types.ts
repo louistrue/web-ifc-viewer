@@ -55,3 +55,16 @@ export interface IFCLoadingResult {
   modelId: number;
   model: IFCModel;
 }
+
+export interface IntersectionResult {
+  type: "point" | "line" | "surface";
+  measurements: {
+    area?: number;
+    length?: number;
+  };
+  geometry: {
+    points?: THREE.BufferGeometry;
+    lines?: THREE.BufferGeometry;
+    surface?: THREE.BufferGeometry;
+  };
+}
