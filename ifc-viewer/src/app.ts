@@ -36,6 +36,8 @@ export class IFCViewer {
   private spatialTree: SpatialTree;
   private meshCounter: number;
   private sectionBoxHelper: THREE.LineSegments | null;
+  private connections: any; // Assuming a connections component exists
+  private isConnectionMode: boolean = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -383,11 +385,11 @@ export class IFCViewer {
 
   private setupPicking(): void {
     this.container.addEventListener("click", (event: MouseEvent) => {
-      this.picker.handleClick(event);
+      this.handleClick(event);
     });
 
     this.container.addEventListener("mousemove", (event: MouseEvent) => {
-      this.picker.handleMouseMove(event);
+      this.handleMouseMove(event);
     });
   }
 
@@ -765,6 +767,127 @@ export class IFCViewer {
     const verticalAngleOK = cameraDir.y > 0.3 && cameraDir.y < 0.7;
 
     return distanceOK && verticalAngleOK;
+  }
+
+  private setupToolbar(): void {
+    // ... existing code ...
+
+    toolbar.addEventListener("action", (e: CustomEvent) => {
+      const action = e.detail.action;
+      if (action === "showAll") {
+        // Existing show all logic
+        this.setSectionBox(null);
+
+        // Also notify connections component
+        if (this.connections) {
+          this.connections.handleToolbarAction("showAll");
+        }
+      }
+      // ... other action handlers ...
+    });
+  }
+
+  public getContainer(): HTMLElement {
+    return this.container;
+  }
+
+  // Add method to toggle connection mode
+  public setConnectionMode(active: boolean): void {
+    this.isConnectionMode = active;
+
+    if (active) {
+      // Clear any existing selection
+      this.clearSelection();
+      // Make all objects semi-transparent
+      this.traverse((object) => {
+        if ((object as THREE.Mesh).isMesh) {
+          const material = (object as THREE.Mesh)
+            .material as THREE.MeshPhongMaterial;
+          if (material) {
+            material.transparent = true;
+            material.opacity = 0.3;
+            material.depthWrite = false;
+          }
+        }
+      });
+    } else {
+      // Restore normal materials but keep any existing selection state
+      this.traverse((object) => {
+        if ((object as THREE.Mesh).isMesh) {
+          const material = (object as THREE.Mesh)
+            .material as THREE.MeshPhongMaterial;
+          if (material) {
+            // Only restore opacity if the object isn't selected
+            if (!object.userData.selected) {
+              material.transparent = false;
+              material.opacity = 1;
+            }
+            material.depthWrite = true;
+          }
+        }
+      });
+    }
+  }
+
+  // Modify the handleMouseMove method
+  private handleMouseMove(event: MouseEvent): void {
+    if (this.isConnectionMode) return; // Skip hover effects in connection mode
+
+    // Update mouse position
+    const rect = this.container.getBoundingClientRect();
+    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Update the picking ray with the camera and mouse position
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    // Find intersected objects
+    let intersects: THREE.Intersection[] = [];
+    this.models.forEach((model) => {
+      const modelIntersects = this.raycaster.intersectObject(model, true);
+      intersects = intersects.concat(modelIntersects);
+    });
+
+    // Handle hover effects using the correct Picker method
+    if (intersects.length > 0) {
+      this.picker.handleMouseMove(event, intersects[0].object);
+    } else {
+      this.picker.handleMouseMove(event, null);
+    }
+  }
+
+  // Modify the handleClick method
+  private handleClick(event: MouseEvent): void {
+    if (this.isConnectionMode) return; // Skip selection in connection mode
+
+    // Update mouse position
+    const rect = this.container.getBoundingClientRect();
+    this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Update the picking ray with the camera and mouse position
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    // Find intersected objects
+    let intersects: THREE.Intersection[] = [];
+    this.models.forEach((model) => {
+      const modelIntersects = this.raycaster.intersectObject(model, true);
+      intersects = intersects.concat(modelIntersects);
+    });
+
+    // Handle selection using the correct Picker method
+    if (intersects.length > 0) {
+      this.picker.handleClick(event, intersects[0].object);
+    } else {
+      this.picker.handleClick(event, null);
+    }
+  }
+
+  // Modify the handleKeyPress method
+  private handleKeyPress(event: KeyboardEvent): void {
+    if (this.isConnectionMode) return; // Skip keyboard shortcuts in connection mode
+
+    // ... rest of the existing key press handler ...
   }
 }
 

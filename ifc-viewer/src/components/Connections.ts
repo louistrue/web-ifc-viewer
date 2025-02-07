@@ -4,7 +4,7 @@ import {
   FastIntersectionDetector,
   IntersectionVisualizer,
 } from "../connection-utils";
-import { IFCModel } from "../types";
+import { IFCModel, IntersectionResult } from "../types";
 
 interface ElementInfo {
   object: THREE.Object3D;
@@ -20,7 +20,12 @@ interface Connection {
     area?: number;
     length?: number;
   };
-  visualization: any; // TODO: Define proper type from IntersectionVisualizer
+  geometry: {
+    points?: THREE.BufferGeometry;
+    lines?: THREE.BufferGeometry;
+    surface?: THREE.BufferGeometry;
+  };
+  visualization: any;
 }
 
 interface ConnectionVisualization {
@@ -62,10 +67,16 @@ export class Connections {
     this.connectionVisualizations = new Map();
     this.isConnectionMode = false;
     this.scene = viewer.getScene();
+
+    // Setup deselection handler
+    this.setupDeselection();
   }
 
   public async analyzeConnections(): Promise<void> {
     try {
+      // Wait a short time to ensure model is loaded
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       // Initialize connection detector if not already done
       if (!this.connectionDetector) {
         this.connectionDetector = new FastIntersectionDetector();
@@ -78,6 +89,17 @@ export class Connections {
           this.viewer.getCamera()
         );
       }
+
+      // Get all elements from the scene
+      const elements = this.getAllElements();
+      if (elements.length === 0) {
+        throw new Error(
+          "No elements found in scene. Please load a model first."
+        );
+      }
+
+      console.log(`Found ${elements.length} elements to analyze`);
+
       this.isConnectionMode = true;
       this.connectionVisualizer.setConnectionMode(true);
 
@@ -98,12 +120,6 @@ export class Connections {
         });
       });
 
-      // Get all elements from the scene
-      const elements = this.getAllElements();
-      if (elements.length === 0) {
-        throw new Error("No elements found in scene");
-      }
-
       // Setup detector for each model
       this.viewer.getModels().forEach((model: IFCModel) => {
         if (this.connectionDetector) {
@@ -122,7 +138,7 @@ export class Connections {
       };
 
       // Visualize connections
-      this.visualizeConnections(connections);
+      await this.visualizeConnections(connections);
 
       // Update UI
       this.updateConnectionsUI();
@@ -130,8 +146,6 @@ export class Connections {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       console.error("Failed to analyze connections:", errorMessage);
-
-      // Show error in UI
       this.showError(errorMessage);
     }
   }
@@ -191,64 +205,44 @@ export class Connections {
   ): Promise<Map<string, Connection>> {
     const connections = new Map<string, Connection>();
 
-    // Clear rawIntersections on each analysis
-    this.rawIntersections = [];
-    let totalIntersectionsFound = 0;
-
-    // Debug: Track all connection pairs
-    const processedPairs = new Set<string>();
-
+    // Compare each element with every other element
     for (let i = 0; i < elements.length; i++) {
       for (let j = i + 1; j < elements.length; j++) {
-        const elementA = elements[i];
-        const elementB = elements[j];
+        const element1 = elements[i];
+        const element2 = elements[j];
 
-        // Debug: Create pair key for logging
-        const pairKey = [elementA.expressID, elementB.expressID]
-          .sort((a, b) => a - b)
-          .join("-");
-
-        if (processedPairs.has(pairKey)) {
-          console.warn(`Duplicate pair found: ${pairKey}`);
-          continue;
-        }
-        processedPairs.add(pairKey);
-
+        // Find intersection between the two elements
         const intersection = await this.findIntersection(
-          elementA.object,
-          elementB.object
+          element1.object,
+          element2.object
         );
 
         if (intersection) {
-          totalIntersectionsFound++;
+          // Create a unique ID for this connection
+          const connectionId = `${element1.expressID}-${element2.expressID}`;
 
-          // Create unique connection ID using sorted express IDs
-          const connectionId = pairKey;
-
-          if (connections.has(connectionId)) {
-            console.warn(`Duplicate connection ID found: ${connectionId}`);
-          }
-
-          const connection = {
+          // Create connection object
+          const connection: Connection = {
             id: connectionId,
-            elements: [elementA, elementB],
+            elements: [element1, element2],
             type: intersection.type,
             measurements: intersection.measurements,
-            visualization: intersection,
+            geometry: intersection.geometry,
+            visualization: null,
           };
+
+          // Store the connection
           connections.set(connectionId, connection);
 
-          // Mark elements
-          elementA.object.userData.hasConnections = true;
-          elementB.object.userData.hasConnections = true;
-          this.addReference(elementA.expressID, connectionId);
-          this.addReference(elementB.expressID, connectionId);
+          // Update element-connection mappings
+          this.updateElementConnections(
+            element1.expressID,
+            element2.expressID,
+            connectionId
+          );
         }
       }
     }
-
-    console.log(`Total connections found: ${connections.size}`);
-    console.log(`Total intersections found: ${totalIntersectionsFound}`);
 
     return connections;
   }
@@ -258,232 +252,7 @@ export class Connections {
     object2: THREE.Object3D
   ): Promise<IntersectionResult | null> {
     if (!this.connectionDetector) return null;
-
-    // First do a quick AABB check with a tight threshold
-    const box1 = new THREE.Box3().setFromObject(object1);
-    const box2 = new THREE.Box3().setFromObject(object2);
-
-    // Get minimum distance between boxes
-    const minDist = this.getMinimumDistance(box1, box2);
-    if (minDist > 0.01) {
-      // 1cm threshold
-      return null;
-    }
-
-    const result = await this.connectionDetector.findIntersection(
-      object1,
-      object2
-    );
-
-    if (result) {
-      // Verify actual contact using precise mesh intersection
-      const touchingPoints = this.findPreciseTouchingPoints(object1, object2);
-      if (touchingPoints.length === 0) {
-        return null;
-      }
-
-      // Create visualization based on actual touching points
-      if (!result.visualization && this.connectionVisualizer) {
-        try {
-          // Determine connection type based on points
-          const type = this.determineConnectionType(touchingPoints);
-
-          // Calculate measurements
-          const measurements = {
-            length:
-              type === "line"
-                ? this.calculateLength(touchingPoints)
-                : undefined,
-            area:
-              type === "surface"
-                ? this.calculateArea(touchingPoints)
-                : undefined,
-          };
-
-          // Create visualization data
-          const visualizationData = {
-            id: `connection-${object1.uuid}-${object2.uuid}`,
-            type: type,
-            color: new THREE.Color(0x00ff00),
-            points: touchingPoints,
-            lines:
-              type === "line" ? this.createLinesFromPoints(touchingPoints) : [],
-            surface:
-              type === "surface"
-                ? this.createSurfaceFromPoints(touchingPoints)
-                : null,
-            measurements: measurements,
-          };
-
-          result.visualization =
-            this.connectionVisualizer.createVisualization(visualizationData);
-          result.type = type;
-          result.measurements = measurements;
-        } catch (error) {
-          console.warn("Failed to create visualization:", error);
-        }
-      }
-
-      return result;
-    }
-
-    return null;
-  }
-
-  private getMinimumDistance(box1: THREE.Box3, box2: THREE.Box3): number {
-    const dx = Math.max(box1.min.x - box2.max.x, box2.min.x - box1.max.x, 0);
-    const dy = Math.max(box1.min.y - box2.max.y, box2.min.y - box1.max.y, 0);
-    const dz = Math.max(box1.min.z - box2.max.z, box2.min.z - box1.max.z, 0);
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-  }
-
-  private findPreciseTouchingPoints(
-    obj1: THREE.Object3D,
-    obj2: THREE.Object3D
-  ): THREE.Vector3[] {
-    const touchingPoints: THREE.Vector3[] = [];
-    const threshold = 0.001; // 1mm tolerance
-
-    // Get all meshes
-    const meshes1: THREE.Mesh[] = [];
-    const meshes2: THREE.Mesh[] = [];
-
-    obj1.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) meshes1.push(child as THREE.Mesh);
-    });
-    obj2.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) meshes2.push(child as THREE.Mesh);
-    });
-
-    for (const mesh1 of meshes1) {
-      const pos1 = mesh1.geometry.getAttribute("position");
-      const worldMatrix1 = mesh1.matrixWorld;
-
-      for (const mesh2 of meshes2) {
-        const pos2 = mesh2.geometry.getAttribute("position");
-        const worldMatrix2 = mesh2.matrixWorld;
-
-        // Sample vertices more sparsely for performance
-        const stride = Math.max(1, Math.floor(pos1.count / 50)); // Sample up to 50 points
-
-        for (let i = 0; i < pos1.count; i += stride) {
-          const point1 = new THREE.Vector3();
-          point1.fromBufferAttribute(pos1, i).applyMatrix4(worldMatrix1);
-
-          // Cast rays in 6 primary directions
-          const raycaster = new THREE.Raycaster();
-          const directions = [
-            new THREE.Vector3(1, 0, 0),
-            new THREE.Vector3(-1, 0, 0),
-            new THREE.Vector3(0, 1, 0),
-            new THREE.Vector3(0, -1, 0),
-            new THREE.Vector3(0, 0, 1),
-            new THREE.Vector3(0, 0, -1),
-          ];
-
-          for (const dir of directions) {
-            raycaster.set(point1, dir.normalize());
-            const intersects = raycaster.intersectObject(mesh2);
-
-            // Only consider very close intersections
-            if (intersects.length > 0 && intersects[0].distance < threshold) {
-              touchingPoints.push(intersects[0].point.clone());
-              break; // Found a touching point, move to next vertex
-            }
-          }
-        }
-      }
-    }
-
-    return this.removeDuplicatePoints(touchingPoints, threshold);
-  }
-
-  private removeDuplicatePoints(
-    points: THREE.Vector3[],
-    threshold: number
-  ): THREE.Vector3[] {
-    const unique: THREE.Vector3[] = [];
-
-    for (const point of points) {
-      let isDuplicate = false;
-      for (const uniquePoint of unique) {
-        if (point.distanceTo(uniquePoint) < threshold) {
-          isDuplicate = true;
-          break;
-        }
-      }
-      if (!isDuplicate) {
-        unique.push(point);
-      }
-    }
-
-    return unique;
-  }
-
-  private determineConnectionType(
-    points: THREE.Vector3[]
-  ): "point" | "line" | "surface" {
-    if (points.length < 2) return "point";
-    if (points.length < 4) return "line";
-
-    // Check if points are roughly coplanar for surface
-    const plane = new THREE.Plane();
-    const center = new THREE.Vector3();
-    points.forEach((p) => center.add(p));
-    center.divideScalar(points.length);
-
-    // Get normal from first three points
-    const v1 = new THREE.Vector3().subVectors(points[1], points[0]);
-    const v2 = new THREE.Vector3().subVectors(points[2], points[0]);
-    plane.normal.crossVectors(v1, v2).normalize();
-    plane.constant = -plane.normal.dot(points[0]);
-
-    // Check if all points lie on this plane
-    const threshold = 0.001;
-    for (const point of points) {
-      if (Math.abs(plane.distanceToPoint(point)) > threshold) {
-        return "line";
-      }
-    }
-
-    // Check if points form a meaningful surface area
-    const area = this.calculateArea(points);
-    if (area < 0.001) {
-      // 1 square mm minimum
-      return "line";
-    }
-
-    return "surface";
-  }
-
-  private calculateArea(points: THREE.Vector3[]): number {
-    if (points.length < 3) return 0;
-
-    // Calculate area using triangulation
-    let area = 0;
-    const center = new THREE.Vector3();
-    points.forEach((p) => center.add(p));
-    center.divideScalar(points.length);
-
-    for (let i = 0; i < points.length; i++) {
-      const p1 = points[i];
-      const p2 = points[(i + 1) % points.length];
-
-      // Calculate triangle area
-      const v1 = new THREE.Vector3().subVectors(p1, center);
-      const v2 = new THREE.Vector3().subVectors(p2, center);
-      area += v1.cross(v2).length() / 2;
-    }
-
-    return area;
-  }
-
-  private calculateLength(points: THREE.Vector3[]): number {
-    let length = 0;
-    for (let i = 0; i < points.length - 1; i++) {
-      length += points[i].distanceTo(points[i + 1]);
-    }
-    return length;
+    return this.connectionDetector.findIntersection(object1, object2);
   }
 
   private calculateStatistics(connections: Map<string, Connection>): any {
@@ -500,30 +269,18 @@ export class Connections {
 
     // Create connection type groups with unique connections
     const connectionsByType = {
-      surface: new Map<string, Connection>(),
-      line: new Map<string, Connection>(),
-      point: new Map<string, Connection>(),
+      surface: [] as Connection[],
+      line: [] as Connection[],
+      point: [] as Connection[],
     };
 
-    // Process each connection and store only unique ones
+    // Group connections by type
     this.connectionData.connections.forEach((connection) => {
-      const ids = [
-        connection.elements[0].expressID,
-        connection.elements[1].expressID,
-      ].sort((a, b) => a - b);
-      const pairKey = ids.join("-");
-      connectionsByType[connection.type].set(pairKey, connection);
+      connectionsByType[connection.type].push(connection);
     });
-
-    // Create filters section
-    this.createFiltersSection(connectionsList);
 
     // Create summary section
-    this.createSummarySection(connectionsList, {
-      surface: Array.from(connectionsByType.surface.values()),
-      line: Array.from(connectionsByType.line.values()),
-      point: Array.from(connectionsByType.point.values()),
-    });
+    this.createSummarySection(connectionsList, connectionsByType);
 
     // Create type sections in specific order
     const typeOrder = ["surface", "line", "point"] as const;
@@ -531,110 +288,12 @@ export class Connections {
 
     typeOrder.forEach((type) => {
       if (createdSections.has(type)) return;
-      const connections = Array.from(connectionsByType[type].values());
+      const connections = connectionsByType[type];
       if (connections.length > 0) {
         this.createTypeSection(connectionsList, type, connections);
         createdSections.add(type);
       }
     });
-  }
-
-  private createFiltersSection(container: Element): void {
-    const filters = document.createElement("div");
-    filters.className = "connection-filters";
-
-    filters.innerHTML = `
-      <div class="filter-group">
-        <label>Visibility Controls</label>
-        <div class="visibility-controls">
-          <label>
-            <input type="checkbox" class="type-visibility" data-type="surface" checked>
-            Surface Connections
-          </label>
-          <label>
-            <input type="checkbox" class="type-visibility" data-type="line" checked>
-            Line Connections
-          </label>
-          <label>
-            <input type="checkbox" class="type-visibility" data-type="point" checked>
-            Point Connections
-          </label>
-        </div>
-        <div class="label-control">
-          <label>
-            <input type="checkbox" class="show-labels">
-            Show Labels
-          </label>
-        </div>
-      </div>
-    `;
-
-    // Add event listeners for visibility toggles
-    filters.querySelectorAll(".type-visibility").forEach((checkbox) => {
-      checkbox.addEventListener("change", (e) => {
-        const target = e.target as HTMLInputElement;
-        const type = target.dataset.type as "surface" | "line" | "point";
-        this.toggleConnectionType(type, target.checked);
-      });
-    });
-
-    // Add event listener for labels toggle
-    const labelsCheckbox = filters.querySelector(
-      ".show-labels"
-    ) as HTMLInputElement;
-    labelsCheckbox.addEventListener("change", (e) => {
-      const target = e.target as HTMLInputElement;
-      this.toggleLabels(target.checked);
-    });
-
-    container.appendChild(filters);
-  }
-
-  private toggleConnectionType(
-    type: "surface" | "line" | "point",
-    visible: boolean
-  ): void {
-    if (!this.connectionVisualizer) return;
-
-    this.connectionVisualizations.forEach((visualization) => {
-      if (visualization.type === type) {
-        if (visible) {
-          this.connectionVisualizer?.show(visualization);
-        } else {
-          this.connectionVisualizer?.hide(visualization);
-        }
-      }
-    });
-
-    // Update UI sections visibility
-    const typeSection = document.querySelector(
-      `.connection-type-section[data-type="${type}"]`
-    );
-    if (typeSection) {
-      if (visible) {
-        typeSection.classList.remove("hidden");
-      } else {
-        typeSection.classList.add("hidden");
-      }
-    }
-  }
-
-  private toggleLabels(visible: boolean): void {
-    if (!this.connectionVisualizer) return;
-
-    this.connectionVisualizer.showLabelsGlobal = visible;
-
-    this.connectionVisualizations.forEach((visualization) => {
-      if (visible) {
-        this.connectionVisualizer?.showLabels(visualization);
-      } else {
-        this.connectionVisualizer?.hideLabels(visualization);
-      }
-    });
-
-    if (visible) {
-      this.connectionVisualizer.updateLabels();
-    }
   }
 
   private async exportConnectionsCSV(): Promise<void> {
@@ -732,12 +391,13 @@ export class Connections {
   }
 
   public exitConnectionMode(): void {
+    console.log("Exiting connection mode");
     this.isConnectionMode = false;
 
     // Reset section box
-    this.viewer.setSectionBox(null);
+    this.clearSectionBox();
 
-    // Reset model materials
+    // Reset model materials and make them fully opaque
     this.viewer.getModels().forEach((model: IFCModel) => {
       model.traverse((child: THREE.Object3D) => {
         if ((child as THREE.Mesh).isMesh) {
@@ -746,80 +406,88 @@ export class Connections {
             mesh.material = mesh.userData.originalMaterial;
             delete mesh.userData.originalMaterial;
           }
+          (mesh.material as THREE.Material).transparent = false;
+          (mesh.material as THREE.Material).opacity = 1;
+          (mesh.material as THREE.Material).depthWrite = true;
+          (mesh.material as THREE.Material).needsUpdate = true;
         }
       });
     });
 
-    // Clean up visualizer
+    // Clean up visualizer without moving camera
     if (this.connectionVisualizer) {
-      this.connectionVisualizer.dispose();
-      this.connectionVisualizer.setConnectionMode(false);
+      console.log("Clearing connection visualizer");
       this.connectionVisualizer.clear();
+      this.connectionVisualizer.setConnectionMode(false);
+      // Removed camera reset
     }
 
     // Clear stored data
     this.connectionData = null;
     this.connectionVisualizations.clear();
+
+    // Clear UI selections
+    const connectionItems = document.querySelectorAll(".connection-item");
+    connectionItems.forEach((item) => {
+      item.classList.remove("selected", "sectioned");
+      const sectionBtn = item.querySelector(".section-btn");
+      if (sectionBtn) {
+        sectionBtn.classList.remove("active");
+      }
+    });
+
+    // Disable connection mode
+    this.viewer.setConnectionMode(false);
+    this.connectionVisualizer?.setConnectionMode(false);
+  }
+
+  private clearSectionBox(): void {
+    this.viewer.setSectionBox(null);
+
+    // Clear sectioned state from all connection items
+    const connectionItems = document.querySelectorAll(".connection-item");
+    connectionItems.forEach((item) => {
+      item.classList.remove("sectioned");
+      const sectionBtn = item.querySelector(".section-btn");
+      if (sectionBtn) {
+        sectionBtn.classList.remove("active");
+      }
+    });
+  }
+
+  // Add this method to handle toolbar interactions
+  public handleToolbarAction(action: string): void {
+    if (action === "showAll") {
+      this.clearSectionBox();
+    }
   }
 
   private async visualizeConnections(
     connections: Map<string, Connection>
-  ): void {
+  ): Promise<void> {
     if (!this.connectionVisualizer) return;
 
-    // Clear existing visualizations
     this.connectionVisualizer.clear();
+    this.connectionVisualizer.setConnectionMode(true);
+    this.connectionVisualizations.clear();
 
-    // Create new visualizations
-    for (const connection of connections.values()) {
+    for (const [id, connection] of connections) {
       try {
-        const touchingPoints = this.findPreciseTouchingPoints(
-          connection.elements[0].object,
-          connection.elements[1].object
-        );
+        if (!connection.geometry) continue;
 
-        if (touchingPoints.length > 0) {
-          // Get element names
-          const element1Name = await this.getElementName(
-            connection.elements[0].modelID,
-            connection.elements[0].expressID
-          );
-          const element2Name = await this.getElementName(
-            connection.elements[1].modelID,
-            connection.elements[1].expressID
-          );
+        const visualization = this.connectionVisualizer.createVisualization({
+          id,
+          type: connection.type,
+          geometry: connection.geometry,
+          measurements: connection.measurements,
+        });
 
-          const type = this.determineConnectionType(touchingPoints);
-          const visualizationData = {
-            id: connection.id,
-            type: type,
-            color: new THREE.Color(0x00ff00),
-            points: touchingPoints,
-            lines:
-              type === "line" ? this.createLinesFromPoints(touchingPoints) : [],
-            surface:
-              type === "surface"
-                ? this.createSurfaceFromPoints(touchingPoints)
-                : null,
-            measurements: connection.measurements,
-            elements: [
-              {
-                expressID: connection.elements[0].expressID,
-                name: element1Name,
-              },
-              {
-                expressID: connection.elements[1].expressID,
-                name: element2Name,
-              },
-            ],
-          };
-
-          const visualization =
-            this.connectionVisualizer.createVisualization(visualizationData);
-          this.connectionVisualizations.set(connection.id, visualization);
+        if (visualization) {
+          this.connectionVisualizations.set(id, visualization);
+          connection.visualization = visualization;
         }
       } catch (error) {
-        console.warn(`Failed to visualize connection ${connection.id}:`, error);
+        console.error(`Failed to visualize connection ${id}:`, error);
       }
     }
   }
@@ -848,6 +516,7 @@ export class Connections {
     header.appendChild(title);
     header.appendChild(exportButton);
 
+    // Create statistics content
     const content = document.createElement("div");
     content.className = "summary-content";
 
@@ -990,9 +659,6 @@ export class Connections {
           }
         </div>
         <div class="connection-actions">
-          <button class="action-btn zoom-btn" title="Zoom to Connection">
-            <i class="fas fa-search"></i>
-          </button>
           <button class="action-btn section-btn" title="Create Section Box">
             <i class="fas fa-cube"></i>
           </button>
@@ -1000,210 +666,236 @@ export class Connections {
         </div>
       `;
 
-    // Add click handlers
-    const zoomBtn = item.querySelector(".zoom-btn");
-    const sectionBtn = item.querySelector(".section-btn");
+    // Add click handler for the entire item (zoom)
+    item.addEventListener("click", (e) => {
+      e.stopPropagation(); // Prevent container click from triggering deselection
+      if (!(e.target as HTMLElement).closest(".section-btn")) {
+        const wasSelected = item.classList.contains("selected");
 
-    zoomBtn?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      // Remove previous selection
-      content
-        .querySelectorAll(".connection-item")
-        .forEach((i) => i.classList.remove("selected"));
-      item.classList.add("selected");
+        // Remove previous selection
+        content
+          .querySelectorAll(".connection-item")
+          .forEach((i) => i.classList.remove("selected"));
 
-      // Reset section box
-      this.viewer.setSectionBox(null);
-
-      // Zoom to connection
-      this.zoomToConnection(connection);
-    });
-
-    sectionBtn?.addEventListener("click", (e) => {
-      e.stopPropagation();
-
-      // Toggle section box
-      if (item.classList.contains("sectioned")) {
-        // Remove section box
-        this.viewer.setSectionBox(null);
-        item.classList.remove("sectioned");
-        sectionBtn?.classList.remove("active");
-      } else {
-        // Remove section from other items
-        content.querySelectorAll(".connection-item").forEach((i) => {
-          i.classList.remove("sectioned");
-          i.querySelector(".section-btn")?.classList.remove("active");
-        });
-
-        // Add section box for this connection
-        this.createSectionBoxForConnection(connection);
-        item.classList.add("sectioned");
-        sectionBtn?.classList.add("active");
+        // Toggle selection
+        if (!wasSelected) {
+          item.classList.add("selected");
+          // Reset section box
+          this.viewer.setSectionBox(null);
+          // Zoom to connection
+          this.zoomToConnection(connection);
+        } else {
+          // Deselect if clicking the same item
+          this.deselectAll();
+        }
       }
     });
+
+    // Add section box button handler
+    const sectionBtn = item.querySelector(".section-btn");
+    if (sectionBtn) {
+      sectionBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+
+        // Toggle section box
+        if (item.classList.contains("sectioned")) {
+          this.clearSectionBox();
+        } else {
+          // Remove section from other items
+          content.querySelectorAll(".connection-item").forEach((i) => {
+            i.classList.remove("sectioned");
+            i.querySelector(".section-btn")?.classList.remove("active");
+          });
+
+          // Add section box for this connection
+          this.createSectionBoxForConnection(connection);
+          item.classList.add("sectioned");
+          sectionBtn.classList.add("active");
+        }
+      });
+    }
 
     content.appendChild(item);
   }
 
   private createSectionBoxForConnection(connection: Connection): void {
+    console.log("Creating section box for connection:", connection.id);
     const visualization = this.connectionVisualizations.get(connection.id);
-    if (!visualization) return;
+
+    if (!visualization) {
+      console.warn(`No visualization found for connection ${connection.id}`);
+      return;
+    }
+
+    // Create bounding box for the connection
+    const bbox = new THREE.Box3();
+    console.log("Initial bbox:", bbox);
+
+    // Add visualization geometry to bbox
+    if (visualization.points) {
+      console.log("Adding points to section bbox");
+      visualization.points.children.forEach((sphere: THREE.Mesh) => {
+        bbox.expandByObject(sphere);
+      });
+    }
+    if (visualization.lines) {
+      console.log("Adding lines to section bbox");
+      bbox.expandByObject(visualization.lines);
+    }
+    if (visualization.surface) {
+      console.log("Adding surface to section bbox");
+      bbox.expandByObject(visualization.surface);
+    }
+
+    // Add padding
+    const padding = 0.5;
+    bbox.min.subScalar(padding);
+    bbox.max.addScalar(padding);
+    console.log("Final bbox with padding:", bbox);
+
+    // Create section box
+    console.log("Setting section box");
+    this.viewer.setSectionBox(bbox);
+  }
+
+  private zoomToConnection(connection: Connection): void {
+    console.log("Attempting to zoom to connection:", connection.id);
+    if (!this.connectionVisualizer) {
+      console.warn("No connection visualizer available");
+      return;
+    }
+
+    const visualization = this.connectionVisualizations.get(connection.id);
+    console.log("Found visualization:", visualization ? "yes" : "no");
+
+    if (!visualization) {
+      console.warn(`No visualization found for connection ${connection.id}`);
+      return;
+    }
 
     // Create bounding box for the connection
     const bbox = new THREE.Box3();
 
     // Add visualization geometry to bbox
     if (visualization.points) {
+      console.log("Adding points to bbox");
       visualization.points.children.forEach((sphere: THREE.Mesh) => {
         bbox.expandByObject(sphere);
       });
     }
     if (visualization.lines) {
+      console.log("Adding lines to bbox");
       bbox.expandByObject(visualization.lines);
     }
     if (visualization.surface) {
+      console.log("Adding surface to bbox");
       bbox.expandByObject(visualization.surface);
     }
 
-    // Add some padding to the bbox
-    const padding = 0.5; // 50cm padding
-    bbox.min.subScalar(padding);
-    bbox.max.addScalar(padding);
+    // Highlight the connection
+    this.connectionVisualizer.highlight(visualization);
+    if (this.connectionVisualizer.showLabelsGlobal) {
+      this.connectionVisualizer.showLabels(visualization);
+      this.connectionVisualizer.updateLabels();
+    }
 
-    // Create section box
-    this.viewer.setSectionBox(bbox);
-  }
+    // Get bbox center and size
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    bbox.getCenter(center);
+    bbox.getSize(size);
 
-  private zoomToConnection(connection: Connection): void {
-    if (!this.connectionVisualizer) return;
+    // Calculate camera position
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = this.viewer.getCamera().fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / Math.tan(fov / 2));
 
-    // Create bounding box for the connection geometry
-    const bbox = new THREE.Box3();
-    const visualization = this.connectionVisualizations.get(connection.id);
+    // Add padding based on connection type
+    const padding =
+      connection.type === "surface"
+        ? 2.0
+        : connection.type === "line"
+        ? 1.5
+        : 4.0;
+    cameraZ *= padding;
 
-    if (visualization) {
-      // Add visualization geometry to bbox
-      if (visualization.points) {
-        visualization.points.children.forEach((sphere: THREE.Mesh) => {
-          bbox.expandByObject(sphere);
-        });
-      }
-      if (visualization.lines) {
-        bbox.expandByObject(visualization.lines);
-      }
-      if (visualization.surface) {
-        bbox.expandByObject(visualization.surface);
-      }
+    // Calculate offset direction and camera position
+    let offsetDirection = new THREE.Vector3(1, 1, 1).normalize();
+    let newPosition: THREE.Vector3;
 
-      // Highlight the connection
-      this.connectionVisualizer.highlight(visualization);
-      if (this.connectionVisualizer.showLabelsGlobal) {
-        this.connectionVisualizer.showLabels(visualization);
-        this.connectionVisualizer.updateLabels();
-      }
+    if (connection.type === "line" && visualization.lines) {
+      // For lines, position camera perpendicular to line direction and centered
+      const positions = visualization.lines.geometry.getAttribute("position");
+      if (positions && positions.count >= 2) {
+        // Get line start and end points
+        const start = new THREE.Vector3();
+        const end = new THREE.Vector3();
+        start.fromBufferAttribute(positions, 0);
+        end.fromBufferAttribute(positions, positions.count - 1);
 
-      // Get bbox center and size
-      const center = new THREE.Vector3();
-      const size = new THREE.Vector3();
-      bbox.getCenter(center);
-      bbox.getSize(size);
+        // Calculate line direction
+        const lineDirection = end.clone().sub(start).normalize();
 
-      // Calculate camera position
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const fov = this.viewer.getCamera().fov * (Math.PI / 180);
-      let cameraZ = Math.abs(maxDim / Math.tan(fov / 2));
+        // Calculate perpendicular vector (cross with up vector)
+        offsetDirection = lineDirection
+          .clone()
+          .cross(new THREE.Vector3(0, 1, 0))
+          .normalize();
 
-      // Add padding based on connection type
-      const padding =
-        connection.type === "surface"
-          ? 2.0
-          : connection.type === "line"
-          ? 1.5
-          : 4.0;
-      cameraZ *= padding;
-
-      // Calculate offset direction and camera position
-      let offsetDirection = new THREE.Vector3(1, 1, 1).normalize();
-      let newPosition: THREE.Vector3;
-
-      if (connection.type === "line" && visualization.lines) {
-        // For lines, position camera perpendicular to line direction and centered
-        const positions = visualization.lines.geometry.getAttribute("position");
-        if (positions && positions.count >= 2) {
-          // Get line start and end points
-          const start = new THREE.Vector3();
-          const end = new THREE.Vector3();
-          start.fromBufferAttribute(positions, 0);
-          end.fromBufferAttribute(positions, positions.count - 1);
-
-          // Calculate line direction
-          const lineDirection = end.clone().sub(start).normalize();
-
-          // Calculate perpendicular vector (cross with up vector)
+        // If the cross product is zero (line is vertical), use another direction
+        if (offsetDirection.lengthSq() < 0.1) {
           offsetDirection = lineDirection
             .clone()
-            .cross(new THREE.Vector3(0, 1, 0))
+            .cross(new THREE.Vector3(1, 0, 0))
             .normalize();
-
-          // If the cross product is zero (line is vertical), use another direction
-          if (offsetDirection.lengthSq() < 0.1) {
-            offsetDirection = lineDirection
-              .clone()
-              .cross(new THREE.Vector3(1, 0, 0))
-              .normalize();
-          }
-
-          // Position camera to see full line length
-          const lineLength = end.distanceTo(start);
-          cameraZ = Math.max(cameraZ, lineLength * 0.75); // Ensure we can see full line
-
-          // Calculate camera position perpendicular to line
-          newPosition = center
-            .clone()
-            .add(offsetDirection.multiplyScalar(cameraZ));
-        } else {
-          newPosition = center
-            .clone()
-            .add(offsetDirection.multiplyScalar(cameraZ));
         }
-      } else if (connection.type === "surface" && visualization.surface) {
-        // Use surface normal for surfaces
-        const normalAttribute =
-          visualization.surface.geometry.getAttribute("normal");
-        if (normalAttribute) {
-          offsetDirection = new THREE.Vector3();
-          offsetDirection.fromBufferAttribute(normalAttribute, 0);
-          offsetDirection.transformDirection(visualization.surface.matrixWorld);
-        }
+
+        // Position camera to see full line length
+        const lineLength = end.distanceTo(start);
+        cameraZ = Math.max(cameraZ, lineLength * 0.75); // Ensure we can see full line
+
+        // Calculate camera position perpendicular to line
         newPosition = center
           .clone()
           .add(offsetDirection.multiplyScalar(cameraZ));
       } else {
-        // Default position for points
         newPosition = center
           .clone()
           .add(offsetDirection.multiplyScalar(cameraZ));
       }
-
-      // Animate camera movement
-      const currentPosition = this.viewer.getCamera().position.clone();
-      const currentTarget = this.viewer.getControls().target.clone();
-
-      this.animateCamera(
-        currentPosition,
-        newPosition,
-        currentTarget,
-        center,
-        1000 // 1 second duration
-      );
-
-      // Unhighlight other connections
-      this.connectionVisualizations.forEach((vis, id) => {
-        if (id !== connection.id) {
-          this.connectionVisualizer?.unhighlight(vis);
-        }
-      });
+    } else if (connection.type === "surface" && visualization.surface) {
+      // Use surface normal for surfaces
+      const normalAttribute =
+        visualization.surface.geometry.getAttribute("normal");
+      if (normalAttribute) {
+        offsetDirection = new THREE.Vector3();
+        offsetDirection.fromBufferAttribute(normalAttribute, 0);
+        offsetDirection.transformDirection(visualization.surface.matrixWorld);
+      }
+      newPosition = center.clone().add(offsetDirection.multiplyScalar(cameraZ));
+    } else {
+      // Default position for points
+      newPosition = center.clone().add(offsetDirection.multiplyScalar(cameraZ));
     }
+
+    // Animate camera movement
+    const currentPosition = this.viewer.getCamera().position.clone();
+    const currentTarget = this.viewer.getControls().target.clone();
+
+    this.animateCamera(
+      currentPosition,
+      newPosition,
+      currentTarget,
+      center,
+      1000 // 1 second duration
+    );
+
+    // Unhighlight other connections
+    this.connectionVisualizations.forEach((vis, id) => {
+      if (id !== connection.id) {
+        this.connectionVisualizer?.unhighlight(vis);
+      }
+    });
   }
 
   private animateCamera(
@@ -1444,6 +1136,31 @@ export class Connections {
     } catch (error) {
       console.warn(`Failed to get name for element ${expressID}:`, error);
       return `Element ${expressID}`;
+    }
+  }
+
+  // Add click handler to deselect when clicking empty space
+  private setupDeselection(): void {
+    console.log("Setting up deselection handler");
+    const container = this.viewer.getContainer();
+    container.addEventListener("click", (e: MouseEvent) => {
+      console.log("Container clicked, target:", e.target);
+      // Removed deselection on empty space click
+    });
+  }
+
+  private deselectAll(): void {
+    // Clear all selections
+    const connectionItems = document.querySelectorAll(".connection-item");
+    connectionItems.forEach((item) => {
+      item.classList.remove("selected");
+    });
+
+    // Unhighlight all visualizations
+    if (this.connectionVisualizer) {
+      this.connectionVisualizations.forEach((vis) => {
+        this.connectionVisualizer?.unhighlight(vis);
+      });
     }
   }
 }
